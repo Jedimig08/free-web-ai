@@ -37,44 +37,6 @@ function stripEntityTags(text: string): string {
 	return out;
 }
 
-function stripInlineMarkdown(text: string): string {
-	return text
-		.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
-		.replace(/\*\*([^*]+)\*\*/g, "$1")
-		.replace(/__([^_]+)__/g, "$1")
-		.replace(/`{1,3}([^`]+)`{1,3}/g, "$1");
-}
-
-function stripMarkdown(text: string): string {
-	let out = stripEntityTags(text);
-	// Remove bold/italic markers **, __, *, _
-	out = out
-		.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
-		.replace(/\*\*([^*]+)\*\*/g, "$1")
-		.replace(/__([^_]+)__/g, "$1")
-		.replace(/\*([^*]+)\*/g, "$1")
-		.replace(/_([^_]+)_/g, "$1")
-		.replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
-		.replace(/^#{1,6}\s+/gm, "")
-		.replace(/^\s*[-*]\s+/gm, "")
-		.replace(/^\s*\d+\.\s+/gm, "");
-	// Flatten newlines to spaces and collapse whitespace (remove \n as requested)
-	out = out.replace(/\s*\n\s*/g, " ").replace(/\s{2,}/g, " ");
-	// Fix spacing artifacts from entity removal (e.g. "by .")
-	out = out.replace(/\s+([.,!?;:])/g, "$1");
-	return out.trim();
-}
-
-function sanitizeChunk(chunk: string): string {
-	// For live streaming deltas, do lightweight cleaning that is safe per-chunk
-	let out = stripEntityTags(chunk);
-	out = stripInlineMarkdown(out);
-	// Flatten newlines in chunk as well to avoid \n in streaming
-	out = out.replace(/\s*\n\s*/g, " ").replace(/\s{2,}/g, " ");
-	out = out.replace(/\s+([.,!?;:])/g, "$1");
-	return out;
-}
-
 export async function parseChatGPTStream(
 	body: ReadableStream<Uint8Array>,
 	onDelta?: (delta: string) => void,
@@ -94,7 +56,7 @@ export async function parseChatGPTStream(
 	const emitText = (delta: string) => {
 		if (!delta || JUNK_TOKENS.has(delta)) return;
 		text += delta;
-		onDelta?.(sanitizeChunk(delta));
+		onDelta?.(delta);
 	};
 
 	const emitThinking = (delta: string) => {
@@ -379,7 +341,7 @@ export async function parseChatGPTStream(
 		flushTagBuffer();
 	}
 
-	// Fallback: if thinking was embedded as <think> tags but we missed mode transitions due to full-content slicing,
+	// Fallback: if thinking was embedded as </think> tags but we missed mode transitions due to full-content slicing,
 	// also try to extract from final text (defensive).
 	// We already handled via pushDelta tagging, but if text still contains tags, split them.
 	if (!thinkingText && text.includes("<think")) {
@@ -390,11 +352,9 @@ export async function parseChatGPTStream(
 		}
 	}
 
-	// Sanitize final output: remove \n, **, entity citations etc. per user request
-	const cleanText = stripMarkdown(text);
 	const cleanThinking = stripEntityTags(thinkingText).trim();
 
-	return { text: cleanText, thinkingText: cleanThinking };
+	return { text, thinkingText: cleanThinking };
 }
 
 function extractThinkTags(raw: string): { text: string; thinking: string } {

@@ -20,32 +20,6 @@ function splitRedactedThinking(full: string): { text: string; thinkingText: stri
 	return { text, thinkingText };
 }
 
-function stripInlineMarkdown(text: string): string {
-	return text
-		.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
-		.replace(/\*\*([^*]+)\*\*/g, "$1")
-		.replace(/__([^_]+)__/g, "$1")
-		.replace(/`{1,3}([^`]+)`{1,3}/g, "$1");
-}
-
-function stripMarkdown(text: string): string {
-	// Remove bold/italic markers **, __, *, _
-	let out = text
-		.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
-		.replace(/\*\*([^*]+)\*\*/g, "$1")
-		.replace(/__([^_]+)__/g, "$1")
-		.replace(/\*([^*]+)\*/g, "$1")
-		.replace(/_([^_]+)_/g, "$1")
-		.replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
-		.replace(/^#{1,6}\s+/gm, "")
-		// Keep list content but remove bullet markers for cleaner plain text
-		.replace(/^\s*[-*]\s+/gm, "")
-		.replace(/^\s*\d+\.\s+/gm, "");
-	// Gateway-level plain text: flatten newlines to spaces (filter \n) and collapse whitespace
-	out = out.replace(/\s*\n\s*/g, " ").replace(/\s{2,}/g, " ");
-	return out.trim();
-}
-
 export async function parseKimiStream(
 	body: ReadableStream<Uint8Array>,
 	onDelta?: (delta: string) => void,
@@ -66,9 +40,7 @@ export async function parseKimiStream(
 		const delta = choices?.[0]?.delta?.content ?? d.text ?? d.content ?? d.delta;
 		if (typeof delta === "string" && delta) {
 			fullText += delta;
-			// Stream stripped markdown for gateway-level plain text
-			// Use inline strip for chunks; final full strip handles bullets/headers
-			onDelta?.(stripMarkdown(delta));
+			onDelta?.(delta);
 		}
 	}
 
@@ -94,7 +66,7 @@ export async function parseKimiStream(
 
 	const split = splitRedactedThinking(fullText);
 	return {
-		text: stripMarkdown(split.text),
+		text: split.text,
 		thinkingText: split.thinkingText,
 	};
 }

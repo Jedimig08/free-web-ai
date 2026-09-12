@@ -468,7 +468,7 @@ def main():
     if args.model_names:
         args.models = args.model_names
     elif not hasattr(args, "models") or not args.models:
-        args.models = ["copilot-search"]
+        args.models = ["deepseek-chat"]
     if args.schema not in SCHEMAS:
         parser.error(f"schema must be one of {SCHEMAS}")
 

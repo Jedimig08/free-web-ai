@@ -135,23 +135,6 @@ class TagAccumulator {
 	}
 }
 
-function sanitizeText(s: string): string {
-	// User requested filtering of \n, ** etc from xiaomimo responses
-	// Collapse newlines and strip common markdown artifacts
-	return s
-		.replace(/^#+\s+/gm, "")
-		.replace(/`{1,3}/g, "")
-		.replace(/\r\n/g, " ")
-		.replace(/\n/g, " ")
-		.replace(/\r/g, " ")
-		.replace(/\*\*/g, "")
-		.replace(/\*/g, "")
-		.replace(/__/g, "")
-		.replace(/_/g, "")
-		.replace(/\s{2,}/g, " ")
-		.trim();
-}
-
 function processMimoContent(
 	chunk: string,
 	acc: TagAccumulator,
@@ -164,18 +147,7 @@ function processMimoContent(
 	acc.pushDelta(content);
 	const delta = acc.text.slice(before);
 	if (delta) {
-		const filtered = sanitizeText(delta);
-		// Only emit if something remains after filtering (avoid empty deltas)
-		// But if delta was "\n\n", filtered becomes "" -> don't emit empty
-		if (filtered) onDelta?.(filtered);
-		else if (delta.trim() === "") {
-			// Preserve single space for paragraph breaks instead of dropping completely
-			// Check if we need a separator: if acc.text already ends with space, skip
-			// For now, emit a single space if previous char wasn't space
-			if (acc.text.length > 0 && !acc.text.endsWith(" ")) {
-				// Don't double-emit; sanitize will have collapsed it
-			}
-		}
+		onDelta?.(delta);
 	}
 }
 
@@ -238,8 +210,7 @@ export async function parseXiaomiMimoStream(
 						acc.pushDelta(newDelta);
 						const textDelta = acc.text.slice(before);
 						if (textDelta) {
-							const filtered = sanitizeText(textDelta);
-							if (filtered) onDelta?.(filtered);
+							onDelta?.(textDelta);
 						}
 					}
 				}
@@ -250,8 +221,7 @@ export async function parseXiaomiMimoStream(
 				acc.pushDelta(dataStr);
 				const delta = acc.text.slice(before);
 				if (delta) {
-					const filtered = sanitizeText(delta);
-					if (filtered) onDelta?.(filtered);
+					onDelta?.(delta);
 				}
 			}
 		}
@@ -280,7 +250,7 @@ export async function parseXiaomiMimoStream(
 
 	acc.flush();
 	return {
-		text: sanitizeText(acc.text),
-		thinkingText: sanitizeText(acc.thinkingText),
+		text: acc.text,
+		thinkingText: acc.thinkingText,
 	};
 }

@@ -111,7 +111,7 @@ export class CopilotWebClient extends BaseApiClient<CopilotWebAuth> {
 			if (params.signal?.aborted) throw new Error("Copilot request aborted");
 			await delay(pollIntervalMs);
 			const result = await page.evaluate(() => {
-				const clean = (t: string) => t.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+				const clean = (t: string) => t.replace(/[\u200B-\u200D\uFEFF]/g, "");
 				const selectors = [
 					'[data-content="ai-message"]',
 					'[class*="response"]',
@@ -161,7 +161,7 @@ export class CopilotWebClient extends BaseApiClient<CopilotWebAuth> {
 		lastText = lastText
 			.replace(/^Copilot said\s*/i, "")
 			.replace(/\s*Edit in a page\s*$/i, "")
-			.trim();
+			.replace(/\s*Copilot is an AI[\s\S]*?Privacy Statement\./, "");
 		const ndjsonLine = `${JSON.stringify({ contentDelta: lastText })}\n`;
 		return textToStream(ndjsonLine);
 	}
