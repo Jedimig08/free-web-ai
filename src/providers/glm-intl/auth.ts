@@ -4,6 +4,7 @@ import {
 	getDefaultCdpUrl,
 	getHeadersWithAuth,
 } from "../../browser/cdp-helpers.ts";
+import { reuseExistingTab } from "../shared/tab-reuse.ts";
 
 export interface GlmIntlWebAuth {
 	cookie: string;
@@ -35,10 +36,19 @@ export async function loginGlmIntlWeb(params: {
 	});
 	const context = browser.contexts()[0];
 	if (!context) throw new Error("No browser context available");
-	const page = context.pages()[0] || (await context.newPage());
+
+	// Reuse the GLM International tab opened at Chrome startup (closing any
+	// leftover duplicate tabs) instead of grabbing pages()[0] — which hijacks
+	// whatever tab happens to be first and creates a second, duplicate tab.
+	let page = await reuseExistingTab(context, ["chat.z.ai"]);
+	if (!page) {
+		page = await context.newPage();
+	}
 
 	params.onProgress("Navigating to GLM International...");
-	await page.goto("https://chat.z.ai/", { waitUntil: "domcontentloaded", timeout: 120000 });
+	if (!page.url().includes("chat.z.ai")) {
+		await page.goto("https://chat.z.ai/", { waitUntil: "domcontentloaded", timeout: 120000 });
+	}
 
 	const userAgent = await page.evaluate(() => navigator.userAgent);
 	params.onProgress("Please login to GLM International in the opened browser window...");

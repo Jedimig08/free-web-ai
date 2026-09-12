@@ -4,6 +4,7 @@ import {
 	getDefaultCdpUrl,
 	getHeadersWithAuth,
 } from "../../browser/cdp-helpers.ts";
+import { reuseExistingTab } from "../shared/tab-reuse.ts";
 
 export interface GlmWebAuth {
 	cookie: string;
@@ -35,10 +36,19 @@ export async function loginGlmWeb(params: {
 	});
 	const context = browser.contexts()[0];
 	if (!context) throw new Error("No browser context available");
-	const page = context.pages()[0] || (await context.newPage());
+
+	// Reuse the ChatGLM tab opened at Chrome startup (closing any leftover
+	// duplicate tabs) instead of grabbing pages()[0] — which hijacks whatever
+	// tab happens to be first and creates a second, duplicate tab.
+	let page = await reuseExistingTab(context, ["chatglm.cn"]);
+	if (!page) {
+		page = await context.newPage();
+	}
 
 	params.onProgress("Navigating to ChatGLM...");
-	await page.goto("https://chatglm.cn", { waitUntil: "domcontentloaded" });
+	if (!page.url().includes("chatglm.cn")) {
+		await page.goto("https://chatglm.cn", { waitUntil: "domcontentloaded" });
+	}
 
 	const userAgent = await page.evaluate(() => navigator.userAgent);
 	params.onProgress("Please login to ChatGLM in the opened browser window...");

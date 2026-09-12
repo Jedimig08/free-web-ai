@@ -4,6 +4,7 @@ import {
 	getDefaultCdpUrl,
 	getHeadersWithAuth,
 } from "../../browser/cdp-helpers.ts";
+import { reuseExistingTab } from "../shared/tab-reuse.ts";
 
 export interface KimiWebAuth {
 	cookie: string;
@@ -37,10 +38,19 @@ export async function loginKimiWeb(params: {
 	});
 	const context = browser.contexts()[0];
 	if (!context) throw new Error("No browser context available");
-	const page = context.pages()[0] || (await context.newPage());
+
+	// Reuse the Kimi tab opened at Chrome startup (closing any leftover
+	// duplicate tabs) instead of grabbing pages()[0] — which hijacks whatever
+	// tab happens to be first and creates a second, duplicate tab.
+	let page = await reuseExistingTab(context, ["kimi.ai"]);
+	if (!page) {
+		page = await context.newPage();
+	}
 
 	params.onProgress("Navigating to Kimi...");
-	await page.goto("https://www.kimi.ai/", { waitUntil: "domcontentloaded" });
+	if (!page.url().includes("kimi.ai")) {
+		await page.goto("https://www.kimi.ai/", { waitUntil: "domcontentloaded" });
+	}
 
 	params.onProgress("Please login in the browser window...");
 	params.onProgress("Waiting for authentication...");

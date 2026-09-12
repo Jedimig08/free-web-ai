@@ -9,6 +9,7 @@ import {
 	getDefaultCdpUrl,
 	getHeadersWithAuth,
 } from "../../browser/cdp-helpers.ts";
+import { reuseExistingTab } from "../shared/tab-reuse.ts";
 
 export interface ClaudeWebAuth {
 	sessionKey: string;
@@ -42,9 +43,18 @@ export async function loginClaudeWeb(params: {
 	});
 	const context = browser.contexts()[0];
 	if (!context) throw new Error("No browser context available");
-	const page = context.pages()[0] || (await context.newPage());
 
-	await page.goto("https://claude.ai/");
+	// Reuse the Claude tab opened at Chrome startup (closing any leftover
+	// duplicate tabs) instead of grabbing pages()[0] — which hijacks whatever
+	// tab happens to be first and creates a second, duplicate tab.
+	let page = await reuseExistingTab(context, ["claude.ai"]);
+	if (!page) {
+		page = await context.newPage();
+	}
+
+	if (!page.url().includes("claude.ai")) {
+		await page.goto("https://claude.ai/");
+	}
 	const userAgent = await page.evaluate(() => navigator.userAgent);
 	params.onProgress("Please login to Claude in the opened browser window...");
 
