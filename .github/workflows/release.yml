@@ -107,17 +107,18 @@ jobs:
       - name: Compress artifact (tar.gz)
         run: |
           cd dist
+          VERSIONED="token-free-gateway-${{ matrix.npm_platform }}-${GITHUB_REF_NAME}"
           if ls ${{ matrix.artifact }}.exe 1>/dev/null 2>&1; then
-            tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}.exe
+            tar czf "$VERSIONED.tar.gz" ${{ matrix.artifact }}.exe
           else
-            tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+            tar czf "$VERSIONED.tar.gz" ${{ matrix.artifact }}
           fi
 
       - name: Upload tar.gz artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}.tar.gz
+          path: dist/token-free-gateway-${{ matrix.npm_platform }}-${{ github.ref_name }}.tar.gz
           retention-days: 5
 
   release:
@@ -225,11 +226,11 @@ jobs:
           echo "" >> notes.md
           echo "| Platform | Architecture | File |" >> notes.md
           echo "|----------|-------------|------|" >> notes.md
-          echo "| Linux | x64 | \`token-free-gateway-linux-x64.tar.gz\` |" >> notes.md
-          echo "| Linux | arm64 | \`token-free-gateway-linux-arm64.tar.gz\` |" >> notes.md
-          echo "| macOS | Intel | \`token-free-gateway-darwin-x64.tar.gz\` |" >> notes.md
-          echo "| macOS | Apple Silicon | \`token-free-gateway-darwin-arm64.tar.gz\` |" >> notes.md
-          echo "| Windows | x64 | \`token-free-gateway-windows-x64.tar.gz\` |" >> notes.md
+          echo "| Linux | x64 | \`token-free-gateway-linux-x64-${TAG}.tar.gz\` |" >> notes.md
+          echo "| Linux | arm64 | \`token-free-gateway-linux-arm64-${TAG}.tar.gz\` |" >> notes.md
+          echo "| macOS | Intel | \`token-free-gateway-darwin-x64-${TAG}.tar.gz\` |" >> notes.md
+          echo "| macOS | Apple Silicon | \`token-free-gateway-darwin-arm64-${TAG}.tar.gz\` |" >> notes.md
+          echo "| Windows | x64 | \`token-free-gateway-windows-x64-${TAG}.tar.gz\` |" >> notes.md
           echo "" >> notes.md
           echo '```bash' >> notes.md
           echo "tar xzf token-free-gateway-<platform>.tar.gz" >> notes.md
