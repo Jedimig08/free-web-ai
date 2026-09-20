@@ -125,12 +125,18 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Require NPM_TOKEN secret
+      - name: Check for NPM_TOKEN secret
+        id: npm_token
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          : "${NPM_TOKEN:?Missing secret NPM_TOKEN}"
+          if [[ -z "${NPM_TOKEN:-}" ]]; then
+            echo "::warning title=NPM_TOKEN missing::Skipping npm publishing — add the NPM_TOKEN repository secret to publish to npm."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/checkout@v4
 
@@ -209,6 +215,19 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "## Token-Free Gateway $TAG" > notes.md
           echo "" >> notes.md
+          # Include the curated "What's New" section from README.md (top-level
+          # `## What's New in This Version` block, up to the first `---`).
+          if [[ -f README.md ]]; then
+            awk '/^## What.s New in This Version/{flag=1; next} flag && /^---$/{exit} flag' README.md \
+              | awk 'NF{p=1} p{buf[++n]=$0; if(NF) last=n} END{for(i=1;i<=last;i++) print buf[i]}' \
+              > whats-new.md
+            if [[ -s whats-new.md ]]; then
+              echo "### ✨ What's New" >> notes.md
+              echo "" >> notes.md
+              cat whats-new.md >> notes.md
+              echo "" >> notes.md
+            fi
+          fi
           echo "### Downloads" >> notes.md
           echo "" >> notes.md
           echo "| Platform | Architecture | File |" >> notes.md
@@ -311,6 +330,7 @@ jobs:
           done
 
       - name: Publish npm platform packages
+        if: steps.npm_token.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -320,6 +340,7 @@ jobs:
           done
 
       - name: Publish npm meta package
+        if: steps.npm_token.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
