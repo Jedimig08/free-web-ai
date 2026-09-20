@@ -129,6 +129,9 @@ export async function resolveModelToProvider(model: string): Promise<string | nu
 		"gpt-5.6-luna": "chatgpt-web",
 		"gpt-5": "chatgpt-web",
 		"gpt-4o": "chatgpt-web",
+		// DeepSeek merged chat + reasoner into a single "deepseek" model
+		"deepseek-chat": "deepseek-web",
+		"deepseek-reasoner": "deepseek-web",
 	};
 	if (legacyMap[lowModel]) return legacyMap[lowModel]!;
 

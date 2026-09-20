@@ -6,10 +6,11 @@ import { DeepSeekWebClient } from "./client.ts";
 export const definition: ProviderDefinition = {
 	id: "deepseek-web",
 	name: "DeepSeek Web",
-	models: [
-		{ id: "deepseek-chat", name: "DeepSeek Chat" },
-		{ id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
-	],
+	// DeepSeek collapsed its chat/reasoner models into a single model whose
+	// reasoning is a collapsible (hideable) thinking span, so the provider now
+	// exposes a single model id. Legacy `deepseek-chat` / `deepseek-reasoner`
+	// ids still resolve to this provider (see registry legacy aliases).
+	models: [{ id: "deepseek", name: "DeepSeek" }],
 	factory: (credentials) => new DeepSeekWebClient(credentials as DeepSeekWebCredentials),
 	loginFn: loginDeepseekWeb,
 };

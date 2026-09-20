@@ -8,7 +8,19 @@ Token-Free Gateway 是一个轻量级 OpenAI 兼容 API 网关，将网页端 AI
 
 ## 本版本更新内容
 
-本版本更新了 provider 阵容，增强了推理模型支持，并提升了浏览器自动化的可靠性。
+本版本主要带来 **DeepSeek** 集成更新（合并为单一模型、隐藏 thinking span），同时更新 provider 阵容、增强推理模型支持，并提升浏览器自动化的可靠性。
+
+### 🔀 DeepSeek：单一模型 + 隐藏 thinking span
+
+DeepSeek 已将网页端模型合并为一个模型，思考过程以可折叠（可隐藏）块展示，网关同步适配：
+
+| 变更 | 详情 |
+| ---- | ---- |
+| ➕ **模型合并** | `deepseek` 成为唯一模型 ID；旧 ID `deepseek-chat` / `deepseek-reasoner` 仍可解析到同一 provider |
+| 🙈 **隐藏 thinking span** | 推理内容不再混入 `content`：新的片段协议（`THINK` / `RESPONSE` 片段、`response/fragments/-1/content` 增量、裸 `{"v":…}` 增量、`response/thinking_content`）统一归入 `reasoning_content` / `reasoning` / `thinking` |
+| 🧠 **推理优先流式输出** | `deepseek` 按推理模型处理：`reasoning_content` 先于正文输出 |
+| 🧪 **测试覆盖** | 解析器以真实 DeepSeek 流的原始抓包作为测试用例 |
+| 🛠️ **工具链** | `tfg-x-wrap` 默认注册 `deepseek`，README 模型表同步更新 |
 
 ### 🔄 Provider 变更
 
@@ -25,14 +37,15 @@ Token-Free Gateway 是一个轻量级 OpenAI 兼容 API 网关，将网页端 AI
 ### 🧠 推理 / 思考模型支持（OpenAI 兼容）
 
 - 助手消息和流式增量新增三个兼容字段：`reasoning_content`、`reasoning`、`thinking`（DeepSeek-reasoner 风格）。
-- 对**思考/推理模型**（模型 ID 包含 `think` 或 `reasoner`），流式输出采用缓冲解析，`reasoning_content` 先于 `content` 输出，与 DeepSeek-reasoner 行为一致；非推理模型保持实时增量流式输出。
+- 对**思考/推理模型**（模型 ID 包含 `think`、`reasoner` 或 `deepseek`），流式输出采用缓冲解析，`reasoning_content` 先于 `content` 输出，与 DeepSeek-reasoner 行为一致；非推理模型保持实时增量流式输出。
+- **DeepSeek 的 thinking span 不再出现在正文中**：DeepSeek 已将 `deepseek-chat`/`deepseek-reasoner` 合并为单一 `deepseek` 模型，思考过程以可折叠块展示；解析器会把所有推理内容（`THINK` 片段类型、`response/thinking_content`、推理片段的裸 `{"v":…}` 增量、`<thinking>` 标签）统一归入推理字段，`content` 仅包含最终答案。
 - 兜底逻辑确保 `content` 不为 `null`/空：当 provider 将答案放进思考缓冲区时（如缺失 `</think>` 标签），思考文本会被提升为正文，同时仍以推理字段暴露。
 - Token 统计现已将思考文本计入 completion tokens。
 
 ### 🛣️ 更智能的模型解析
 
 - 模型 → provider 匹配改为**大小写不敏感**的精确匹配，同时保持千问国内版（`-cn`）与国际版（`-intl`）的区分。
-- **向后兼容的旧模型 ID 别名**：不带平台后缀的旧 ID 仍可解析，如 `qwen3.7`、`qwen3.8-max`、`gpt-5`、`gpt-4o`、`gpt-5.6-sol/terra/luna`。
+- **向后兼容的旧模型 ID 别名**：不带平台后缀的旧 ID 仍可解析，如 `qwen3.7`、`qwen3.8-max`、`gpt-5`、`gpt-4o`、`gpt-5.6-sol/terra/luna`，以及 `deepseek-chat` / `deepseek-reasoner`（已合并为 `deepseek`）。
 - **Claude 灵活匹配**：任何以 `claude-` 开头的模型 ID 均路由到 Claude provider，可直接使用你账号支持的精确模型 ID。
 
 ### 🔍 新增 Claude 模型发现接口
@@ -250,7 +263,7 @@ curl http://localhost:3456/v1/chat/completions \
 | ---------- | -------------- | --------------------- | ------------------------- |
 | Claude     | `claude-*`     | Session cookie        | CDP（浏览器 fetch）       |
 | ChatGPT    | `chatgpt-*`    | Access token + cookie | CDP（浏览器 fetch）       |
-| DeepSeek   | `deepseek-*`   | Bearer token + cookie | CDP（浏览器 fetch + PoW） |
+| DeepSeek   | `deepseek`（兼容旧 ID `deepseek-chat`、`deepseek-reasoner`） | Bearer token + cookie | CDP（浏览器 fetch + PoW） |
 | 豆包 → **Dola** | `dola-*`       | Session cookie        | CDP（浏览器 fetch）       |
 | Gemini     | `gemini-*`     | Google SID cookie     | CDP（浏览器 fetch）       |
 | 智谱 GLM   | `glm-*`        | Refresh token cookie  | CDP（浏览器 fetch）       |

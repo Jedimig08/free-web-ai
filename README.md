@@ -8,7 +8,19 @@ Token-Free Gateway is a lightweight OpenAI-compatible API server that turns web-
 
 ## What's New in This Version
 
-This release updates the provider lineup, improves reasoning-model support, and hardens browser automation reliability.
+This release lands the updated **DeepSeek** integration (one merged model with a hidden thinking span), refreshes the provider lineup, improves reasoning-model support, and hardens browser automation reliability.
+
+### 🔀 DeepSeek: One Model, Hidden Thinking Span
+
+DeepSeek collapsed its web models into a single model whose reasoning is rendered as a collapsible ("hideable") block. The gateway follows suit:
+
+| Change | Details |
+| ------ | ------- |
+| ➕ **Merged model** | `deepseek` is now the only DeepSeek model id; the legacy `deepseek-chat` / `deepseek-reasoner` ids still resolve to the same provider |
+| 🙈 **Thinking span hidden** | Reasoning never leaks into `content` — the new fragment protocol (`THINK` / `RESPONSE` fragments, `response/fragments/-1/content` deltas, bare `{"v":…}` deltas, `response/thinking_content`) is routed to `reasoning_content` / `reasoning` / `thinking` |
+| 🧠 **Reasoning-first streaming** | `deepseek` streams like a reasoning model: `reasoning_content` is emitted **before** the answer |
+| 🧪 **Test coverage** | The stream parser is unit-tested against a verbatim capture of the real DeepSeek stream |
+| 🛠️ **Tooling** | `tfg-x-wrap` registers `deepseek` by default and the README model table was updated |
 
 ### 🔄 Provider Changes
 
@@ -25,14 +37,15 @@ The gateway now supports **14 providers**: Claude, ChatGPT, DeepSeek, Dola, Gemi
 ### 🧠 Reasoning / Thinking Model Support (OpenAI-compatible)
 
 - Assistant messages and streaming deltas now expose reasoning output through three standard-compatible fields: `reasoning_content`, `reasoning`, and `thinking` (DeepSeek-reasoner style).
-- For **think/reasoner models** (any model ID containing `think` or `reasoner`), streaming uses buffered parsing so `reasoning_content` is emitted **before** content, matching the DeepSeek-reasoner behavior clients expect. Non-reasoning models keep live incremental streaming.
+- For **think/reasoner models** (any model ID containing `think`, `reasoner`, or `deepseek`), streaming uses buffered parsing so `reasoning_content` is emitted **before** content, matching the DeepSeek-reasoner behavior clients expect. Non-reasoning models keep live incremental streaming.
+- **DeepSeek's thinking span stays hidden from the main response**: DeepSeek merged `deepseek-chat`/`deepseek-reasoner` into one `deepseek` model whose reasoning is rendered as a collapsible block, so the parser routes every reasoning span (the `THINK` fragment type, `response/thinking_content`, plain `{"v":…}` deltas of a reasoning fragment, `<thinking>` tags) to the reasoning fields — `content` only ever carries the answer.
 - Fallback logic ensures `content` is never `null`/empty when a provider puts the answer into the thinking buffer (e.g. missing `</think>` tag) — the thinking text is promoted to content while still being exposed as reasoning.
 - Token accounting now includes thinking text in completion token estimates.
 
 ### 🛣️ Smarter Model Resolution
 
 - Model → provider lookup is now **case-insensitive** with exact matching, keeping Qwen CN (`-cn`) and Qwen Intl (`-intl`) variants distinct.
-- **Backward-compatible legacy aliases**: old model IDs without provider suffixes still resolve, e.g. `qwen3.7`, `qwen3.8-max`, `gpt-5`, `gpt-4o`, `gpt-5.6-sol/terra/luna`.
+- **Backward-compatible legacy aliases**: old model IDs without provider suffixes still resolve, e.g. `qwen3.7`, `qwen3.8-max`, `gpt-5`, `gpt-4o`, `gpt-5.6-sol/terra/luna`, plus `deepseek-chat` / `deepseek-reasoner` (merged into `deepseek`).
 - **Flexible Claude matching**: any model ID starting with `claude-` routes to the Claude provider, so you can use the exact model ID your account supports.
 
 ### 🔍 New Claude Model Discovery Endpoint
@@ -227,7 +240,7 @@ curl http://localhost:3456/v1/chat/completions \
 | ----------- | --------------- | --------------------- | ------------------------- |
 | Claude      | `claude-*`      | Session cookie        | CDP (browser fetch)       |
 | ChatGPT     | `chatgpt-*`     | Access token + cookie | CDP (browser fetch)       |
-| DeepSeek    | `deepseek-*`    | Bearer token + cookie | CDP (browser fetch + PoW) |
+| DeepSeek    | `deepseek` (legacy `deepseek-chat`, `deepseek-reasoner`) | Bearer token + cookie | CDP (browser fetch + PoW) |
 | Doubao → **Dola** | `dola-*`        | Session cookie        | CDP (browser fetch)       |
 | Gemini      | `gemini-*`      | Google SID cookie     | CDP (browser fetch)       |
 | GLM (智谱)  | `glm-*`         | Refresh token cookie  | CDP (browser fetch)       |

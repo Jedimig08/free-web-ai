@@ -21,7 +21,7 @@ Commands:
 Options:
   --port PORT       local API port (default 3456)
   --api-key KEY     API key Warp will send as Bearer (default: any-string)
-  --model NAME      model id to register; repeatable (default: deepseek-chat)
+  --model NAME      model id to register; repeatable (default: deepseek)
   --models          print all available model ids from the local API and exit
   --name NAME       display name for the endpoint (default: Local Tunnel)
   --schema SCHEMA   openai_chat_completions (default) | openai_responses |
@@ -468,7 +468,7 @@ def main():
     if args.model_names:
         args.models = args.model_names
     elif not hasattr(args, "models") or not args.models:
-        args.models = ["deepseek-chat"]
+        args.models = ["deepseek"]
     if args.schema not in SCHEMAS:
         parser.error(f"schema must be one of {SCHEMAS}")
 

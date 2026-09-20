@@ -72,7 +72,7 @@ async function handleNonStreaming(
 
 		// Fallback: if parser put answer into thinkingText (e.g. missing </think>), ensure content is not empty/null
 		let effectiveText = result.text;
-		let effectiveThinking = result.thinkingText;
+		const effectiveThinking = result.thinkingText;
 		if (!effectiveText && effectiveThinking) {
 			// If text is empty but thinking exists, treat thinking as content to avoid null
 			// Keep original thinking as reasoning as well for backward compat
@@ -225,21 +225,38 @@ async function streamWithoutTools(
 	// For think/reasoning models we need buffered parsing so reasoning_content
 	// can be emitted BEFORE content (like deepseek-reasoner). For regular models
 	// keep live incremental streaming for better UX.
-	const isThinkModel = model.toLowerCase().includes("think") || model.toLowerCase().includes("reasoner");
+	// DeepSeek merged its chat/reasoner models into a single "deepseek" model
+	// with a hideable thinking span, so it must take the buffered (reasoning
+	// first) path as well.
+	const lowerModel = model.toLowerCase();
+	const isThinkModel =
+		lowerModel.includes("think") ||
+		lowerModel.includes("reasoner") ||
+		lowerModel.includes("deepseek");
 	if (isThinkModel) {
 		const result = await client.parseStream(providerStream);
 		let effectiveText = result.text;
-		let effectiveThinking = result.thinkingText;
+		const effectiveThinking = result.thinkingText;
 		if (!effectiveText && effectiveThinking) {
 			effectiveText = effectiveThinking;
 		}
 		if (effectiveThinking) {
 			w.writeChunk(id, model, [
-				{ index: 0, delta: { reasoning_content: effectiveThinking, reasoning: effectiveThinking, thinking: effectiveThinking }, finish_reason: null },
+				{
+					index: 0,
+					delta: {
+						reasoning_content: effectiveThinking,
+						reasoning: effectiveThinking,
+						thinking: effectiveThinking,
+					},
+					finish_reason: null,
+				},
 			]);
 		}
 		if (effectiveText) {
-			w.writeChunk(id, model, [{ index: 0, delta: { content: effectiveText }, finish_reason: null }]);
+			w.writeChunk(id, model, [
+				{ index: 0, delta: { content: effectiveText }, finish_reason: null },
+			]);
 		} else {
 			w.writeChunk(id, model, [{ index: 0, delta: { content: "" }, finish_reason: null }]);
 		}
@@ -251,10 +268,12 @@ async function streamWithoutTools(
 		w.writeChunk(id, model, [{ index: 0, delta: { content: delta }, finish_reason: null }]);
 	});
 	let liveEffectiveText = result.text;
-	let liveEffectiveThinking = result.thinkingText;
+	const liveEffectiveThinking = result.thinkingText;
 	if (!liveEffectiveText && liveEffectiveThinking) {
 		liveEffectiveText = liveEffectiveThinking;
-		w.writeChunk(id, model, [{ index: 0, delta: { content: liveEffectiveText }, finish_reason: null }]);
+		w.writeChunk(id, model, [
+			{ index: 0, delta: { content: liveEffectiveText }, finish_reason: null },
+		]);
 	}
 	// Fallback: if parser buffered thinking (e.g. deepseek style via tag) even for non-think label,
 	// emit it if present (rare but safe)
@@ -262,7 +281,11 @@ async function streamWithoutTools(
 		// If we already emitted content via delta, reasoning should have been before content for correctness,
 		// but for live path it's okay to emit after as fallback
 		w.writeChunk(id, model, [
-			{ index: 0, delta: { reasoning_content: liveEffectiveThinking, reasoning: liveEffectiveThinking }, finish_reason: null },
+			{
+				index: 0,
+				delta: { reasoning_content: liveEffectiveThinking, reasoning: liveEffectiveThinking },
+				finish_reason: null,
+			},
 		]);
 	}
 	w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
@@ -278,7 +301,7 @@ async function streamWithTools(
 ) {
 	const result = await client.parseStream(providerStream);
 	let effectiveText = result.text;
-	let effectiveThinking = result.thinkingText;
+	const effectiveThinking = result.thinkingText;
 	if (!effectiveText && effectiveThinking) {
 		effectiveText = effectiveThinking;
 	}
@@ -287,7 +310,11 @@ async function streamWithTools(
 	// If thinking exists and not a tool call, emit reasoning first
 	if (effectiveThinking && finishReason !== "tool_calls") {
 		w.writeChunk(id, model, [
-			{ index: 0, delta: { reasoning_content: effectiveThinking, reasoning: effectiveThinking }, finish_reason: null },
+			{
+				index: 0,
+				delta: { reasoning_content: effectiveThinking, reasoning: effectiveThinking },
+				finish_reason: null,
+			},
 		]);
 	}
 
@@ -301,7 +328,9 @@ async function streamWithTools(
 			w.writeChunk(id, model, [{ index: 0, delta: { content: "" }, finish_reason: null }]);
 		} else {
 			// fallback already has effectiveText = thinking, so content will be set
-			w.writeChunk(id, model, [{ index: 0, delta: { content: effectiveText }, finish_reason: null }]);
+			w.writeChunk(id, model, [
+				{ index: 0, delta: { content: effectiveText }, finish_reason: null },
+			]);
 		}
 		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 	}

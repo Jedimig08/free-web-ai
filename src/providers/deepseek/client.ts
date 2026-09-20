@@ -65,11 +65,11 @@ export class DeepSeekWebClient extends BaseApiClient<DeepSeekWebCredentials> {
 		hostKey: "deepseek.com",
 		startUrl: "https://chat.deepseek.com/",
 		cookieDomain: ".deepseek.com",
-		defaultModel: "deepseek-chat",
-		models: [
-			{ id: "deepseek-chat", name: "DeepSeek Chat" },
-			{ id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
-		],
+		// DeepSeek merged `deepseek-chat` / `deepseek-reasoner` into one model
+		// with a hideable thinking span; the gateway exposes a single id and
+		// routes the span to `reasoning_content`.
+		defaultModel: "deepseek",
+		models: [{ id: "deepseek", name: "DeepSeek" }],
 	};
 
 	private chatSessionId = "";
@@ -312,6 +312,9 @@ export class DeepSeekWebClient extends BaseApiClient<DeepSeekWebCredentials> {
 			parent_message_id: params.parentMessageId ?? null,
 			prompt: params.message,
 			ref_file_ids: params.fileIds || [],
+			// The merged DeepSeek model streams its reasoning in a hideable
+			// thinking span; keep it enabled — the stream parser routes that
+			// span to `reasoning_content` only (never to the main content).
 			thinking_enabled: true,
 			search_enabled: params.searchEnabled ?? true,
 			preempt: params.preempt ?? false,
