@@ -215,43 +215,28 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "## Token-Free Gateway $TAG" > notes.md
           echo "" >> notes.md
-          # Include the curated "What's New" section from README.md (top-level
-          # `## What's New in This Version` block, up to the first `---`).
-          if [[ -f README.md ]]; then
-            awk '/^## What.s New in This Version/{flag=1; next} flag && /^---$/{exit} flag' README.md \
-              | awk 'NF{p=1} p{buf[++n]=$0; if(NF) last=n} END{for(i=1;i<=last;i++) print buf[i]}' \
-              > whats-new.md
-            if [[ -s whats-new.md ]]; then
-              echo "### ✨ What's New" >> notes.md
-              echo "" >> notes.md
-              cat whats-new.md >> notes.md
-              echo "" >> notes.md
-            fi
+          # Curated, short per-release notes (Fixes / Other Changes).
+          # Edit RELEASE_NOTES.md at the repo root for every release.
+          if [[ -f RELEASE_NOTES.md ]]; then
+            cat RELEASE_NOTES.md >> notes.md
+            echo "" >> notes.md
           fi
-          echo "### Downloads" >> notes.md
+          echo "### ⬇️ Downloads" >> notes.md
           echo "" >> notes.md
           echo "| Platform | Architecture | File |" >> notes.md
           echo "|----------|-------------|------|" >> notes.md
           echo "| Linux | x64 | \`token-free-gateway-linux-x64.tar.gz\` |" >> notes.md
           echo "| Linux | arm64 | \`token-free-gateway-linux-arm64.tar.gz\` |" >> notes.md
-          echo "| macOS | x64 (Intel) | \`token-free-gateway-darwin-x64.tar.gz\` |" >> notes.md
-          echo "| macOS | arm64 (Apple Silicon) | \`token-free-gateway-darwin-arm64.tar.gz\` |" >> notes.md
+          echo "| macOS | Intel | \`token-free-gateway-darwin-x64.tar.gz\` |" >> notes.md
+          echo "| macOS | Apple Silicon | \`token-free-gateway-darwin-arm64.tar.gz\` |" >> notes.md
           echo "| Windows | x64 | \`token-free-gateway-windows-x64.tar.gz\` |" >> notes.md
-          echo "" >> notes.md
-          echo "### Install via npm" >> notes.md
-          echo "" >> notes.md
-          echo '```bash' >> notes.md
-          echo "npx token-free-gateway@${TAG#v} --help" >> notes.md
-          echo '```' >> notes.md
-          echo "" >> notes.md
-          echo "### Usage (binary)" >> notes.md
           echo "" >> notes.md
           echo '```bash' >> notes.md
           echo "tar xzf token-free-gateway-<platform>.tar.gz" >> notes.md
-          echo "./token-free-gateway --help" >> notes.md
+          echo "./token-free-gateway serve" >> notes.md
           echo '```' >> notes.md
           echo "" >> notes.md
-          echo "> \`playwright-core\` is bundled inside the binary — no extra runtime dependencies. Just install Chrome or Chromium." >> notes.md
+          echo "> \`playwright-core\` is bundled inside the binary — Chrome/Chromium is the only dependency. SHA256: \`checksums-sha256.txt\`." >> notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
