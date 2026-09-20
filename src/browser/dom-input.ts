@@ -50,9 +50,7 @@ export async function pasteText(
 		const dt = new DataTransfer();
 		dt.setData("text/plain", t);
 		el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
-		el.dispatchEvent(
-			new InputEvent("input", { bubbles: true, data: t, inputType: "insertText" }),
-		);
+		el.dispatchEvent(new InputEvent("input", { bubbles: true, data: t, inputType: "insertText" }));
 	}, text);
 	await page.waitForTimeout(400);
 

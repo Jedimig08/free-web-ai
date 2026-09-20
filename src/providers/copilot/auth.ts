@@ -84,7 +84,11 @@ export async function loginCopilotWeb(params: {
 				if (cookies.length === 0) return;
 
 				const hasAuth = cookies.some(
-					(c) => c.name === "_U" || c.name === "MSPAuth" || c.name === "MSPProf" || c.name === "__Host-copilot",
+					(c) =>
+						c.name === "_U" ||
+						c.name === "MSPAuth" ||
+						c.name === "MSPProf" ||
+						c.name === "__Host-copilot",
 				);
 				if (!hasAuth) return;
 

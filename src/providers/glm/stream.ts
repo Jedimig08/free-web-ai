@@ -46,7 +46,11 @@ function extractGlmText(data: Record<string, unknown>): string {
 		if (d && typeof d.content === "string") return d.content;
 	}
 
-	const t = data.text ?? data.content ?? data.delta ?? (typeof data.message === "string" ? data.message : undefined);
+	const t =
+		data.text ??
+		data.content ??
+		data.delta ??
+		(typeof data.message === "string" ? data.message : undefined);
 	return typeof t === "string" ? t : "";
 }
 

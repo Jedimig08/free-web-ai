@@ -19,7 +19,14 @@ function stripEntityTags(text: string): string {
 					return arr[1] as string;
 				}
 				for (const v of arr) {
-					if (typeof v === "string" && v.trim() && v !== "company" && v !== "person" && v !== "entity" && v !== "organization") {
+					if (
+						typeof v === "string" &&
+						v.trim() &&
+						v !== "company" &&
+						v !== "person" &&
+						v !== "entity" &&
+						v !== "organization"
+					) {
 						return v;
 					}
 				}
@@ -33,7 +40,10 @@ function stripEntityTags(text: string): string {
 		}
 		return "";
 	});
-	out = out.replace(/[^]*?/g, "").replace(/【[^】]*?】/g, "").replace(/\[\^[^\]]*?\]/g, "");
+	out = out
+		.replace(/[^]*?/g, "")
+		.replace(/【[^】]*?】/g, "")
+		.replace(/\[\^[^\]]*?\]/g, "");
 	return out;
 }
 
@@ -91,7 +101,9 @@ export async function parseChatGPTStream(
 					idx: thinkEndMatch?.index ?? -1,
 					len: thinkEndMatch?.[0].length ?? 0,
 				},
-			].filter((t) => t.idx !== -1).toSorted((a, b) => a.idx - b.idx);
+			]
+				.filter((t) => t.idx !== -1)
+				.toSorted((a, b) => a.idx - b.idx);
 
 			if (indices.length > 0) {
 				const first = indices[0]!;
@@ -156,7 +168,13 @@ export async function parseChatGPTStream(
 						id?: string;
 						author?: { role?: string };
 						role?: string;
-						content?: { parts?: unknown[]; content_type?: string; text?: string; thinking?: string; reasoning?: string };
+						content?: {
+							parts?: unknown[];
+							content_type?: string;
+							text?: string;
+							thinking?: string;
+							reasoning?: string;
+						};
 						metadata?: Record<string, unknown>;
 				  }
 				| undefined;
@@ -168,7 +186,10 @@ export async function parseChatGPTStream(
 			// p/v reasoning channel (DeepSeek style, also possible for ChatGPT)
 			const pField = data.p as string | undefined;
 			const pStr = typeof pField === "string" ? pField : "";
-			if ((pStr.includes("reasoning") || pStr.includes("thinking") || data.type === "thinking") && typeof data.v === "string") {
+			if (
+				(pStr.includes("reasoning") || pStr.includes("thinking") || data.type === "thinking") &&
+				typeof data.v === "string"
+			) {
 				pushDelta(data.v, "thinking");
 				return;
 			}
@@ -178,7 +199,18 @@ export async function parseChatGPTStream(
 			}
 
 			// reasoning_content in choices[0].delta (OpenAI style used by think models)
-			const choice = (data.choices as Array<{ delta?: { reasoning_content?: string; reasoning?: string; thinking?: string; content?: string } }> | undefined)?.[0];
+			const choice = (
+				data.choices as
+					| Array<{
+							delta?: {
+								reasoning_content?: string;
+								reasoning?: string;
+								thinking?: string;
+								content?: string;
+							};
+					  }>
+					| undefined
+			)?.[0];
 			if (choice?.delta) {
 				if (choice.delta.reasoning_content) {
 					pushDelta(choice.delta.reasoning_content, "thinking");
@@ -218,7 +250,11 @@ export async function parseChatGPTStream(
 			if (msg?.content) {
 				const c = msg.content as Record<string, unknown>;
 				// Handle explicit thinking content_type
-				if (c.content_type === "thinking" || c.content_type === "reasoning" || c.content_type === "thoughts") {
+				if (
+					c.content_type === "thinking" ||
+					c.content_type === "reasoning" ||
+					c.content_type === "thoughts"
+				) {
 					const thoughtStr =
 						(typeof c.thinking === "string" && c.thinking) ||
 						(typeof c.reasoning === "string" && c.reasoning) ||
@@ -233,7 +269,12 @@ export async function parseChatGPTStream(
 					if (Array.isArray(partsThinking) && partsThinking.length > 0) {
 						for (const p of partsThinking) {
 							if (typeof p === "string" && p) pushDelta(p, "thinking");
-							else if (typeof p === "object" && p !== null && "text" in p && typeof (p as { text?: string }).text === "string") {
+							else if (
+								typeof p === "object" &&
+								p !== null &&
+								"text" in p &&
+								typeof (p as { text?: string }).text === "string"
+							) {
 								pushDelta((p as { text: string }).text, "thinking");
 							}
 						}
@@ -268,11 +309,11 @@ export async function parseChatGPTStream(
 					typeof rawPart === "string"
 						? rawPart
 						: typeof rawPart === "object" &&
-						  rawPart !== null &&
-						  "text" in rawPart &&
-						  typeof (rawPart as { text?: string }).text === "string"
-						? (rawPart as { text: string }).text
-						: undefined;
+								rawPart !== null &&
+								"text" in rawPart &&
+								typeof (rawPart as { text?: string }).text === "string"
+							? (rawPart as { text: string }).text
+							: undefined;
 				if (typeof content === "string" && content) {
 					// Delta detection via accumulatedContent slicing (ChatGPT sends full content each time)
 					// But content may also contain think tags inline.
@@ -300,7 +341,10 @@ export async function parseChatGPTStream(
 				return;
 			}
 			// Direct string v without p (content channel)
-			if (typeof data.v === "string" && (!pField || pStr.includes("content") || pStr.includes("choices"))) {
+			if (
+				typeof data.v === "string" &&
+				(!pField || pStr.includes("content") || pStr.includes("choices"))
+			) {
 				pushDelta(data.v);
 				return;
 			}
@@ -359,9 +403,9 @@ export async function parseChatGPTStream(
 
 function extractThinkTags(raw: string): { text: string; thinking: string } {
 	let thinking = "";
-	const re = /<(?:think|thinking|thought|reasoning)\b[^<>]*>([\s\S]*?)<\/(?:think|thinking|thought|reasoning)>/gi;
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(raw)) !== null) {
+	const re =
+		/<(?:think|thinking|thought|reasoning)\b[^<>]*>([\s\S]*?)<\/(?:think|thinking|thought|reasoning)>/gi;
+	for (const m of raw.matchAll(re)) {
 		thinking += (thinking ? "\n" : "") + (m[1]?.trim() ?? "");
 	}
 	const text = raw.replace(re, "").trim();

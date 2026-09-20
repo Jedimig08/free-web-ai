@@ -47,11 +47,7 @@ export class XiaomiMimoWebClient extends BaseApiClient<XiaomiMimoWebAuth> {
 		};
 
 		return (await page.evaluate(
-			async (args: {
-				baseUrl: string;
-				bodyJson: string;
-				conversationId: string;
-			}) => {
+			async (args: { baseUrl: string; bodyJson: string; conversationId: string }) => {
 				const { baseUrl, bodyJson, conversationId } = args;
 				const cookie = document.cookie;
 				const phMatch = cookie.match(/xiaomichatbot_ph="?([^;"\s]+)/);

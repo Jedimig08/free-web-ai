@@ -33,7 +33,11 @@ function extractGlmIntlText(data: Record<string, unknown>): string {
 		}
 	}
 	if (out) return out;
-	const t = data.text ?? data.content ?? data.delta ?? (typeof data.message === "string" ? data.message : undefined);
+	const t =
+		data.text ??
+		data.content ??
+		data.delta ??
+		(typeof data.message === "string" ? data.message : undefined);
 	return typeof t === "string" ? t : "";
 }
 

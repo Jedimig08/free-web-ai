@@ -97,7 +97,8 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 		// the ChatGPT web UI does and returns real assistant content.
 		if (base === "chatgpt-think") return "auto";
 		// Legacy aliases (backward compat)
-		if (["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "gpt-4o", "gpt-4"].includes(base)) return "auto";
+		if (["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "gpt-4o", "gpt-4"].includes(base))
+			return "auto";
 		return model;
 	}
 
