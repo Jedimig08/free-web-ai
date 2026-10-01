@@ -1,6 +1,6 @@
 {
 	"name": "@andeya/token-free-gateway-darwin-x64",
-	"version": "0.7.0",
+	"version": "0.8.0",
 	"description": "Prebuilt token-free-gateway binary for macOS (Intel x86_64)",
 	"author": "andeya <andeyalee@outlook.com>",
 	"license": "MIT",
