@@ -12,7 +12,9 @@ const PROVIDER_URLS = [
 	"https://www.qianwen.com",
 	"https://kimi.ai",
 	"https://gemini.google.com/app",
-	"https://copilot.microsoft.com",
+	// Copilot's chat moved to copilot.com; copilot.microsoft.com now just
+	// client-side redirects there, so open the new host directly.
+	"https://copilot.com/",
 	"https://chatglm.cn",
 	"https://chat.z.ai/",
 	"https://www.perplexity.ai",

@@ -26,7 +26,7 @@ DeepSeek collapsed its web models into a single model whose reasoning is rendere
 
 | Change | Details |
 | ------ | ------- |
-| ➕ **New provider: Microsoft Copilot** (`copilot-web`) | Models: `copilot-smart`, `copilot-think-deeper`, `copilot-study`, `copilot-search` |
+| ➕ **New provider: Microsoft Copilot** (`copilot-web`) | Models: `copilot-auto`, `copilot-quick`, `copilot-think-deeper` — each one switches the Copilot model picker (Auto / Quick response / Think deeper) on `copilot.com` per request, then restores your previous selection |
 | ➕ **New provider: Dola** (`dola-web`) | Models: `dola-fast`, `dola-pro` — replaces the removed Doubao provider |
 | ➖ **Removed: Grok** | The `grok` provider has been dropped from the registry |
 | ➖ **Removed: Doubao** | Replaced by Dola (www.dola.com) |

@@ -26,7 +26,7 @@ DeepSeek 已将网页端模型合并为一个模型，思考过程以可折叠�
 
 | 变更 | 详情 |
 | ---- | ---- |
-| ➕ **新增 provider：Microsoft Copilot**（`copilot-web`） | 模型：`copilot-smart`、`copilot-think-deeper`、`copilot-study`、`copilot-search` |
+| ➕ **新增 provider：Microsoft Copilot**（`copilot-web`） | 模型：`copilot-auto`、`copilot-quick`、`copilot-think-deeper` —— 每次请求会切换 `copilot.com` 上的模型选择器（Auto / Quick response / Think deeper），请求结束后恢复你原先的选择 |
 | ➕ **新增 provider：Dola**（`dola-web`） | 模型：`dola-fast`、`dola-pro` —— 替代已移除的豆包 |
 | ➖ **移除：Grok** | `grok` provider 已从注册表中移除 |
 | ➖ **移除：豆包** | 由 Dola（www.dola.com）取代 |

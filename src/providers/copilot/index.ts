@@ -5,11 +5,12 @@ import { CopilotWebClient } from "./client.ts";
 export const definition: ProviderDefinition = {
 	id: "copilot-web",
 	name: "Copilot Web",
+	// Matches the redesigned Copilot picker on copilot.com
+	// (Auto / Quick response / Think deeper).
 	models: [
-		{ id: "copilot-smart", name: "Copilot Smart" },
+		{ id: "copilot-auto", name: "Copilot Auto" },
+		{ id: "copilot-quick", name: "Copilot Quick Response" },
 		{ id: "copilot-think-deeper", name: "Copilot Think Deeper" },
-		{ id: "copilot-study", name: "Copilot Study" },
-		{ id: "copilot-search", name: "Copilot Search" },
 	],
 	factory: (credentials) => new CopilotWebClient(credentials as any),
 	loginFn: loginCopilotWeb,

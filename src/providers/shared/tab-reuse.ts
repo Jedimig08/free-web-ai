@@ -18,27 +18,35 @@ function urlMatches(page: Page, domains: string[]): boolean {
  * grabbing `pages()[0]` (which hijacks whatever tab happens to be first and
  * leaves a duplicate login tab behind).
  *
- * Also closes leftover duplicate tabs for the same domain (e.g. created by
- * older buggy versions or Chrome session restore), keeping only the first
- * matching tab, and brings it to the front for the user.
+ * When several tabs match — e.g. a legacy host that is being migrated to a new
+ * domain — the tab matching the FIRST entry of `domains` (the canonical host)
+ * wins. Every other matching tab is closed so leftover duplicates (from older
+ * buggy versions, Chrome session restore, or a host migration) do not pile up.
+ * The surviving tab is brought to the front for the user.
  */
 export async function reuseExistingTab(
 	context: BrowserContext,
 	domains: string[],
 ): Promise<Page | null> {
-	let page: Page | null = null;
-	for (const p of context.pages()) {
-		if (!urlMatches(p, domains)) continue;
-		if (!page) {
-			page = p;
-			try {
-				await p.bringToFront();
-			} catch {}
-		} else {
-			try {
-				await p.close();
-			} catch {}
-		}
+	const matches = context.pages().filter((p) => urlMatches(p, domains));
+	if (matches.length === 0) return null;
+
+	// Prefer the canonical (first) domain over any legacy aliases.
+	const canonicalHost = domains[0];
+	const page =
+		(canonicalHost ? matches.find((p) => urlMatches(p, [canonicalHost])) : undefined) ??
+		matches[0]!;
+
+	for (const p of matches) {
+		if (p === page) continue;
+		try {
+			await p.close();
+		} catch {}
 	}
+
+	try {
+		await page.bringToFront();
+	} catch {}
+
 	return page;
 }
