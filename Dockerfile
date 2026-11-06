@@ -1,6 +1,7 @@
 FROM oven/bun:1
 
 WORKDIR /app
+RUN chown bun:bun /app
 
 # Keep the source and lockfile in the image; the local .env is excluded by .dockerignore.
 COPY --chown=bun:bun . .

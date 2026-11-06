@@ -1,0 +1,74 @@
+#!/bin/bash
+set -u
+
+BIN="${TFG_CHROME_BIN:-/usr/bin/chromium}"
+PROFILE="${TFG_CHROME_PROFILE:-/config/free-web-ai-profile}"
+LOG="${TFG_CHROME_LOG:-/config/chromium.log}"
+CDP_PORT="${TFG_CDP_PORT:-9222}"
+
+mkdir -p "$PROFILE"
+
+# The persistent profile may have remote debugging disabled. Force it on
+# before Chromium reads Local State, otherwise --remote-debugging-port is
+# ignored and CDP never starts.
+python3 - "$PROFILE" <<'PY'
+import json
+import os
+import sys
+
+profile = sys.argv[1]
+path = os.path.join(profile, "Local State")
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+data.setdefault("devtools", {}).setdefault("remote_debugging", {})["allowed"] = True
+with open(path, "w") as f:
+    json.dump(data, f)
+PY
+
+# Remove stale profile locks left by a previous container run. Only do this
+# when no Chromium process is alive, so a second launch cannot steal a live
+# profile.
+if ! pgrep -f '/usr/lib/chromium/chromium' >/dev/null 2>&1; then
+  rm -f "$PROFILE"/Singleton*
+fi
+
+WAYLAND=()
+if [ "${PIXELFLUX_WAYLAND:-}" = "true" ]; then
+  WAYLAND=(--ozone-platform=wayland)
+fi
+
+ACCESSIBILITY=()
+if [ "${PELORUS:-}" = "true" ]; then
+  ACCESSIBILITY=(--force-renderer-accessibility)
+fi
+
+echo "=== $(date -Is) starting chromium profile=$PROFILE" >> "$LOG"
+
+# Log whether CDP actually came up. Chromium's stderr is otherwise hidden by
+# the upstream wrapper, which makes this class of failure very hard to debug.
+(
+  for _ in $(seq 1 30); do
+    if (exec 3<>/dev/tcp/127.0.0.1/"$CDP_PORT") 2>/dev/null; then
+      echo "=== $(date -Is) CDP listening on 127.0.0.1:$CDP_PORT" >> "$LOG"
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "=== $(date -Is) CDP did NOT start on 127.0.0.1:$CDP_PORT" >> "$LOG"
+) &
+
+exec "$BIN" \
+  --no-sandbox \
+  --password-store=basic \
+  --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT' \
+  --start-maximized \
+  --test-type \
+  --user-data-dir="$PROFILE" \
+  "${WAYLAND[@]}" \
+  "${ACCESSIBILITY[@]}" \
+  "$@" >> "$LOG" 2>&1

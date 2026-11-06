@@ -2,7 +2,8 @@ free-web-ai: two-container starter
 
 Services
 - gateway: builds this repository with the official Bun image and starts `bun run start`.
-- browser: LinuxServer Chromium with an HTTPS browser desktop and a persistent profile.
+- browser: builds a small LinuxServer Chromium layer with an HTTPS browser desktop,
+  a persistent profile, and a wrapper that guarantees CDP is enabled.
 
 Ports
 - Gateway API: host 3457 -> container 3456.
@@ -12,6 +13,8 @@ Ports
 Persistent data
 - gateway-data stores the gateway's HOME (/config), including its home-directory config/session data.
 - browser-data stores Chromium's /config and its separate free-web-ai-profile.
+- Chromium startup output and CDP status are written to /config/chromium.log
+  inside the browser container.
 
 Setup
 1. Put Dockerfile, docker-compose.yml, .dockerignore, and .env.example in the root of the free-web-ai repository.
