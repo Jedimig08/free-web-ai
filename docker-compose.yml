@@ -1,0 +1,52 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: free-web-ai-gateway
+    restart: unless-stopped
+    init: true
+    environment:
+      HOME: /config
+      TFG_PORT: "3456"
+      TFG_CDP_URL: "http://127.0.0.1:9222"
+      TFG_API_KEY: ${TFG_API_KEY:?Set TFG_API_KEY in .env}
+    volumes:
+      - gateway-data:/config
+    depends_on:
+      - browser
+    network_mode: "service:browser"
+
+  browser:
+    image: lscr.io/linuxserver/chromium:latest
+    container_name: free-web-ai-browser
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/Lisbon}
+      CUSTOM_USER: ${BROWSER_USER:-admin}
+      PASSWORD: ${BROWSER_PASSWORD:?Set BROWSER_PASSWORD in .env}
+      CHROME_CLI: >-
+        --remote-debugging-address=0.0.0.0
+        --remote-debugging-port=9222
+        --remote-allow-origins=*
+        --user-data-dir=/config/free-web-ai-profile
+    ports:
+      - "${BROWSER_GUI_HOST_PORT:-6081}:3001"
+      - "${GATEWAY_HOST_PORT:-3457}:3456"
+    expose:
+      - "9222"
+    volumes:
+      - browser-data:/config
+    shm_size: "1gb"
+    networks:
+      - free-web-ai-net
+
+networks:
+  free-web-ai-net:
+    driver: bridge
+
+volumes:
+  gateway-data:
+  browser-data:

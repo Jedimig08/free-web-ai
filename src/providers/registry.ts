@@ -16,7 +16,6 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
 		claude,
 		chatgpt,
 		deepseek,
-		dola,
 		gemini,
 		glm,
 		glmIntl,
@@ -25,12 +24,10 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
 		perplexity,
 		qwen,
 		qwenCn,
-		xiaomimo,
 	] = await Promise.all([
 		import("./claude/index.ts"),
 		import("./chatgpt/index.ts"),
 		import("./deepseek/index.ts"),
-		import("./dola/index.ts"),
 		import("./gemini/index.ts"),
 		import("./glm/index.ts"),
 		import("./glm-intl/index.ts"),
@@ -39,14 +36,12 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
 		import("./perplexity/index.ts"),
 		import("./qwen/index.ts"),
 		import("./qwen-cn/index.ts"),
-		import("./xiaomimo/index.ts"),
 	]);
 
 	_definitions = [
 		claude.definition,
 		chatgpt.definition,
 		deepseek.definition,
-		dola.definition,
 		gemini.definition,
 		glm.definition,
 		glmIntl.definition,
@@ -55,7 +50,6 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
 		perplexity.definition,
 		qwen.definition,
 		qwenCn.definition,
-		xiaomimo.definition,
 	];
 	return _definitions;
 }
