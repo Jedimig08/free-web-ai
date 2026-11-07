@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatCompletionRequest, ChatCompletionResponse } from "../src/openai/types.ts";
-import { parseClaudeStream } from "../src/providers/claude/stream.ts";
+import { parseChatGPTStream } from "../src/providers/chatgpt/stream.ts";
 
 function createMockClient(responseText: string) {
 	return {
@@ -9,18 +9,21 @@ function createMockClient(responseText: string) {
 		sendMessage: async () => {
 			const encoder = new TextEncoder();
 			const sseData = JSON.stringify({
-				type: "content_block_delta",
-				delta: { text: responseText },
+				message: {
+					id: "mock-assistant-message",
+					author: { role: "assistant" },
+					content: { content_type: "text", parts: [responseText] },
+				},
 			});
 			return new ReadableStream({
 				start(controller) {
-					controller.enqueue(encoder.encode(`data: ${sseData}\n\n`));
+					controller.enqueue(encoder.encode(`data: ${sseData}\n\ndata: [DONE]\n\n`));
 					controller.close();
 				},
 			});
 		},
 		parseStream: async (body: ReadableStream<Uint8Array>, onDelta?: (d: string) => void) =>
-			parseClaudeStream(body, onDelta),
+			parseChatGPTStream(body, onDelta),
 		listModels: () => [{ id: "test-model", name: "Test" }],
 	};
 }
