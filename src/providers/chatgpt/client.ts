@@ -7,13 +7,15 @@ import type { ApiClientConfig, NormalizedSendParams } from "../factory/types.ts"
 import { parseCookieHeader } from "../shared/cookie-parser.ts";
 import { throwIfSessionExpired } from "../shared/error-guard.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
+import { PROMPT_TRIM_MARKER, trimPromptToFit } from "../shared/prompt-trim.ts";
 import { textToStream } from "../shared/stream-helpers.ts";
 import type { StreamResult } from "../types.ts";
-import { withTimeout } from "../types.ts";
+import { ProviderApiError, withTimeout } from "../types.ts";
 import type { ChatGPTWebAuth } from "./auth.ts";
 import { parseChatGPTStream } from "./stream.ts";
 
 const SEND_TIMEOUT_MS = 120_000;
+const RETRY_PROMPT_LIMITS = [30_000, 15_000];
 
 export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 	readonly providerId = "chatgpt-web";
@@ -270,6 +272,7 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 
 	/**
 	 * Override sendMessage for custom error handling:
+	 * - 413 → retry with a progressively shorter prompt
 	 * - 403 → DOM fallback
 	 * - 401 → SessionExpiredError
 	 * - sentinelError hint
@@ -280,19 +283,57 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 		signal?: AbortSignal;
 	}): Promise<ReadableStream<Uint8Array>> {
 		const page = await this.getPage();
-		const normalized: NormalizedSendParams = {
-			message: params.message,
-			model: params.model || this.config.defaultModel,
-			signal: params.signal,
-		};
-		const responseData = (await this.callApi(page, normalized)) as EvalResult & {
-			sentinelError?: string;
-		};
-		if (!responseData.ok) {
+		const original = params.message;
+		if (original.includes(PROMPT_TRIM_MARKER)) {
+			// The gateway already dropped older turns; don't append the trimmed
+			// prompt to an overlong ChatGPT conversation.
+			this.conversationId = undefined;
+			this.parentMessageId = undefined;
+		}
+
+		const limits = [original.length, ...RETRY_PROMPT_LIMITS].filter(
+			(limit, index, all) => limit > 0 && (index === 0 || limit < all[index - 1]!),
+		);
+		let lastError: Error | undefined;
+
+		for (let i = 0; i < limits.length; i++) {
+			const limit = limits[i]!;
+			const message = limit >= original.length ? original : trimPromptToFit(original, limit);
+			if (i > 0 || message !== original) {
+				this.conversationId = undefined;
+				this.parentMessageId = undefined;
+			}
+
+			const normalized: NormalizedSendParams = {
+				message,
+				model: params.model || this.config.defaultModel,
+				signal: params.signal,
+			};
+			const responseData = (await this.callApi(page, normalized)) as EvalResult & {
+				sentinelError?: string;
+			};
+
+			if (responseData.ok) {
+				console.log(`[ChatGPT Web] Response length: ${responseData.data?.length || 0} bytes`);
+				return textToStream(responseData.data ?? "");
+			}
+
+			if (responseData.status === 413) {
+				console.warn(
+					`[ChatGPT Web] 413 for ${message.length} chars, retrying with a shorter prompt`,
+				);
+				lastError = new ProviderApiError(
+					413,
+					`ChatGPT message too long (${message.length} chars)`,
+				);
+				continue;
+			}
+
 			if (responseData.status === 403) {
 				console.log("[ChatGPT Web] 403 from API, falling back to DOM simulation");
-				return this.chatCompletionsViaDOM({ message: params.message, signal: params.signal });
+				return this.chatCompletionsViaDOM({ message, signal: params.signal });
 			}
+
 			throwIfSessionExpired(
 				this.providerId,
 				responseData.status,
@@ -305,8 +346,8 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 				`ChatGPT API error ${responseData.status}: ${responseData.error?.slice(0, 200) || ""}${sentinelHint}`,
 			);
 		}
-		console.log(`[ChatGPT Web] Response length: ${responseData.data?.length || 0} bytes`);
-		return textToStream(responseData.data ?? "");
+
+		throw lastError ?? new ProviderApiError(413, "ChatGPT message too long even after trimming");
 	}
 
 	override async parseStream(

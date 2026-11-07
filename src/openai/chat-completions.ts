@@ -1,4 +1,5 @@
 import { evictProviderClient } from "../providers/registry.ts";
+import { trimPromptToFit } from "../providers/shared/prompt-trim.ts";
 import type { WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
 import { buildPromptFromMessages, parseToolResponse } from "../tool-calling/converter.ts";
@@ -11,6 +12,13 @@ import type {
 } from "./types.ts";
 
 let _routeTimeoutMs = 300_000;
+
+const DEFAULT_MAX_PROMPT_CHARS = 60_000;
+
+function getMaxPromptChars(): number {
+	const configured = Number(process.env.TFG_MAX_PROMPT_CHARS);
+	return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_PROMPT_CHARS;
+}
 
 export function setRouteTimeoutSec(sec: number): void {
 	_routeTimeoutMs = sec * 1000;
@@ -38,10 +46,18 @@ export async function handleChatCompletions(
 
 	const id = generateId();
 	const model = body.model;
-	const { prompt, hasTools } = buildPromptFromMessages(body.messages, body.tools, body.tool_choice);
+	let { prompt, hasTools } = buildPromptFromMessages(body.messages, body.tools, body.tool_choice);
 
 	if (!prompt) {
 		return jsonError("Could not construct prompt from messages", 400);
+	}
+
+	const maxPromptChars = getMaxPromptChars();
+	if (prompt.length > maxPromptChars) {
+		console.warn(
+			`[chat-completions] Prompt too long (${prompt.length} chars), trimming to ${maxPromptChars} chars`,
+		);
+		prompt = trimPromptToFit(prompt, maxPromptChars);
 	}
 
 	const handler = body.stream
