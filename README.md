@@ -10,6 +10,22 @@ Token-Free Gateway is a lightweight OpenAI-compatible API server that turns web-
 
 This release lands the updated **DeepSeek** integration (one merged model with a hidden thinking span), refreshes the provider lineup, improves reasoning-model support, and hardens browser automation reliability.
 
+### 🧵 Oversized Prompt Handling (ChatGPT 413)
+
+ChatGPT's web backend rejects oversized single-message prompts with
+`413 message_length_exceeds_limit`. The gateway now:
+
+- Trims prompts above `TFG_MAX_PROMPT_CHARS` (default `60000` characters),
+  keeping the beginning of the prompt (system/tool instructions) and the most
+  recent turns.
+- Retries ChatGPT requests that still return 413 with progressively smaller
+  prompts (`30000`, then `15000` characters).
+- Starts a fresh ChatGPT conversation when a trimmed prompt is sent, so the
+  retry does not append to an already oversized conversation.
+
+Older turns are dropped when the limit is exceeded; the newest context is kept.
+Set `TFG_MAX_PROMPT_CHARS` higher if your provider accepts longer prompts.
+
 ### 🔀 DeepSeek: One Model, Hidden Thinking Span
 
 DeepSeek collapsed its web models into a single model whose reasoning is rendered as a collapsible ("hideable") block. The gateway follows suit:
@@ -321,6 +337,7 @@ All variables use the `TFG_` prefix to avoid conflicts with other software.
 | `TFG_API_KEY`             | `""` (disabled)         | Bearer token for client auth; empty = no auth            |
 | `TFG_CDP_URL`             | `http://127.0.0.1:9222` | Chrome DevTools Protocol endpoint                        |
 | `TFG_REQUEST_TIMEOUT_SEC` | `300`                   | Per-request timeout (seconds) for `/v1/chat/completions` |
+| `TFG_MAX_PROMPT_CHARS`    | `60000`                 | Maximum prompt size before trimming (characters)         |
 
 You can also put them in a `.env` file next to the binary — Bun loads it automatically:
 
@@ -329,9 +346,10 @@ TFG_PORT=3456
 TFG_API_KEY=my-secret-key
 TFG_CDP_URL=http://127.0.0.1:9222
 TFG_REQUEST_TIMEOUT_SEC=300
+TFG_MAX_PROMPT_CHARS=60000
 ```
 
-> **Note:** environment variables always win over `config.json`, so you can use the file for defaults and override individual values per-session with env vars.
+> **Note:** environment variables always win over `config.json`, so you can use the file for defaults and override individual values per-session with env vars. `TFG_MAX_PROMPT_CHARS` is read from the environment only and is not part of `config.json`.
 
 ---
 
@@ -425,6 +443,7 @@ bun run bump:major  # Bump major version (X.0.0) and sync all package.json files
 | DeepSeek auth fails                 | Keep DeepSeek chat page open during `webauth`                               |
 | Daemon not starting                 | Check logs: `~/.token-free-gateway/gateway.log`                             |
 | Request hangs / 504 timeout         | Increase `requestTimeoutSec` or check upstream session health               |
+| ChatGPT returns `413 message_length_exceeds_limit` | Gateway trims prompts above `TFG_MAX_PROMPT_CHARS` and retries at 30000/15000 chars; lower the limit if it persists |
 | `/health` returns `session_expired` | Provider session expired — run `token-free-gateway webauth` to re-authorize |
 
 ---

@@ -16,6 +16,12 @@ Persistent data
 - Chromium startup output and CDP status are written to /config/chromium.log
   inside the browser container.
 
+Prompt size
+- The gateway trims prompts above TFG_MAX_PROMPT_CHARS (default 60000 characters)
+  and retries ChatGPT 413 responses with shorter prompts (30000, then 15000).
+- To change the limit in Docker, set TFG_MAX_PROMPT_CHARS in .env; the gateway
+  service passes it through (default 60000).
+
 Setup
 1. Put Dockerfile, docker-compose.yml, .dockerignore, and .env.example in the root of the free-web-ai repository.
 2. Copy .env.example to .env.
