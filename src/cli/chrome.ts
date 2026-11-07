@@ -3,23 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** All web AI provider login pages to open at startup */
-const PROVIDER_URLS = [
-	"https://claude.ai/new",
-	"https://chatgpt.com",
-	"https://chat.deepseek.com/",
-	"https://www.dola.com/chat/",
-	"https://chat.qwen.ai",
-	"https://www.qianwen.com",
-	"https://kimi.ai",
-	"https://gemini.google.com/app",
-	// Copilot's chat moved to copilot.com; copilot.microsoft.com now just
-	// client-side redirects there, so open the new host directly.
-	"https://copilot.com/",
-	"https://chatglm.cn",
-	"https://chat.z.ai/",
-	"https://www.perplexity.ai",
-	"https://aistudio.xiaomimimo.com",
-];
+const PROVIDER_URLS = ["https://chatgpt.com"];
 
 const CDP_PORT = 9222;
 
@@ -163,8 +147,8 @@ export async function startChrome() {
 	console.log("==========================================");
 	console.log("  Next steps:");
 	console.log("==========================================");
-	console.log("  1. Log in to each provider in the browser tabs");
-	console.log("     (all provider pages have been opened automatically)");
+	console.log("  1. Log in to ChatGPT in the browser");
+	console.log("     (ChatGPT has been opened automatically)");
 	console.log("  2. Run: token-free-gateway webauth");
 	console.log("  3. Run: token-free-gateway start");
 	console.log("");

@@ -3,7 +3,6 @@ import { BrowserManager } from "./browser/manager.ts";
 import { loadConfig } from "./config.ts";
 import { handleChatCompletions, setRouteTimeoutSec } from "./openai/chat-completions.ts";
 import { listAuthorizedProviders } from "./providers/auth-store.ts";
-import type { ClaudeWebClient } from "./providers/claude/client.ts";
 import {
 	checkAllSessions,
 	getClientForModel,
@@ -60,9 +59,6 @@ async function handleRequest(req: Request): Promise<Response> {
 		return withCors(await handleModelByIdRoute(modelId));
 	}
 
-	if (pathname === "/v1/providers/claude-web/discover" && req.method === "GET") {
-		return withCors(await handleClaudeDiscoverRoute());
-	}
 
 	return withCors(
 		Response.json(
@@ -80,7 +76,7 @@ async function handleRequest(req: Request): Promise<Response> {
 // ── Route handlers ───────────────────────────────────────────
 
 async function handleHealthRoute(): Promise<Response> {
-	const authorized = listAuthorizedProviders();
+	const authorized = listAuthorizedProviders().filter((id) => id === "chatgpt-web");
 	const browserHealthy = await BrowserManager.getInstance().isHealthy();
 	const sessions = await checkAllSessions();
 	const hasExpired = Object.values(sessions).some((s) => !s.valid && s.reason !== "unchecked");
@@ -154,34 +150,6 @@ async function handleModelByIdRoute(modelId: string): Promise<Response> {
 	});
 }
 
-async function handleClaudeDiscoverRoute(): Promise<Response> {
-	try {
-		const { getProviderClient } = await import("./providers/registry.ts");
-		const client = await getProviderClient("claude-web");
-		if (!client) {
-			return Response.json(
-				{
-					error: {
-						message: "Claude provider not authorized. Run 'token-free-gateway webauth'.",
-						type: "invalid_request_error",
-					},
-				},
-				{ status: 404 },
-			);
-		}
-		const claudeClient = client as unknown as ClaudeWebClient;
-		const models = await claudeClient.discoverAvailableModels();
-		return Response.json({
-			available_models: models,
-			message: "Use these model IDs with the Claude provider",
-			config_models: client.listModels().map((m) => m.id),
-		});
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return Response.json({ error: { message, type: "server_error" } }, { status: 500 });
-	}
-}
-
 // ── Server bootstrap ─────────────────────────────────────────
 
 const server = Bun.serve({
@@ -192,7 +160,7 @@ const server = Bun.serve({
 	idleTimeout: 0,
 });
 
-const authorized = listAuthorizedProviders();
+const authorized = listAuthorizedProviders().filter((id) => id === "chatgpt-web");
 console.log(`Token-Free Gateway listening on http://localhost:${server.port}`);
 console.log(`Auth: ${config.gatewayApiKey ? "enabled (Bearer token)" : "disabled"}`);
 console.log(`Request timeout: ${config.requestTimeoutSec}s`);
