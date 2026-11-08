@@ -1,10 +1,11 @@
 /**
- * Converts between OpenAI tool protocol and Claude Web text-based tool calling.
+ * Converts between the OpenAI tool protocol and web-model text conventions.
  *
  * Flow:
- * 1. buildPromptFromMessages: Converts OpenAI tools + messages into a single prompt
- * 2. parseToolResponse: Parses Claude's text response into OpenAI tool_calls format
- * 3. applyToolChoice: Enforces tool_choice semantics on both prompt and response
+ * 1. buildPromptFromMessages: converts OpenAI tools + messages into one prompt
+ * 2. parseToolResponse: converts Bash code blocks in the response into native
+ *    OpenAI tool calls
+ * 3. resolveEffectiveTools: enforces tool_choice semantics
  */
 
 import type {
@@ -15,8 +16,8 @@ import type {
 	ToolDefinition,
 	ToolMessage,
 } from "../openai/types.ts";
-import { extractToolCalls, hasToolCall } from "./parser.ts";
-import { buildToolPrompt, detectLanguage } from "./prompt.ts";
+import { extractBashBlocks } from "./parser.ts";
+import { buildToolPrompt } from "./prompt.ts";
 
 export interface ConvertedPrompt {
 	prompt: string;
@@ -24,15 +25,10 @@ export interface ConvertedPrompt {
 	hasTools: boolean;
 }
 
-function detectLang(messages: ChatMessage[]): "en" | "cn" {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i];
-		if (msg?.role === "user") {
-			const text = typeof msg.content === "string" ? msg.content : "";
-			return detectLanguage(text);
-		}
-	}
-	return "en";
+interface JsonSchema {
+	type?: string;
+	properties?: Record<string, JsonSchema>;
+	required?: string[];
 }
 
 function extractTextContent(content: string | { type: string; text?: string }[]): string {
@@ -43,13 +39,34 @@ function extractTextContent(content: string | { type: string; text?: string }[])
 		.join("");
 }
 
+function findBashTool(tools: ToolDefinition[]): ToolDefinition | undefined {
+	return (
+		tools.find((t) => t.function.name.toLowerCase() === "bash") ??
+		tools.find((t) => /bash/i.test(t.function.name))
+	);
+}
+
+function commandFromArguments(raw: string): string {
+	try {
+		const parsed = JSON.parse(raw) as { command?: unknown };
+		if (typeof parsed.command === "string") return parsed.command;
+	} catch {
+		// Fall through to the raw string.
+	}
+	return raw;
+}
+
 function formatAssistantMsg(msg: AssistantMessage): string | null {
 	if (msg.tool_calls && msg.tool_calls.length > 0) {
-		const calls = msg.tool_calls.map(
-			(tc) =>
-				`\`\`\`tool_json\n{"tool":"${tc.function.name}","parameters":${tc.function.arguments}}\n\`\`\``,
-		);
-		return `Assistant: [Called tools]\n${calls.join("\n")}`;
+		const calls = msg.tool_calls.map((tc) => {
+			if (tc.function.name.toLowerCase() === "bash") {
+				const command = commandFromArguments(tc.function.arguments);
+				return ["```bash", command, "```"].join("\n");
+			}
+			return `[Called ${tc.function.name} with arguments: ${tc.function.arguments}]`;
+		});
+		const prose = msg.content ? `${msg.content}\n` : "";
+		return `Assistant: ${prose}[Called tools]\n${calls.join("\n")}`;
 	}
 	return msg.content ? `Assistant: ${msg.content}` : null;
 }
@@ -119,7 +136,7 @@ export function resolveEffectiveTools(
 }
 
 /**
- * Build a single prompt string from OpenAI messages + tools for Claude Web.
+ * Build a single prompt string from OpenAI messages + tools for the web model.
  */
 export function buildPromptFromMessages(
 	messages: ChatMessage[],
@@ -129,10 +146,9 @@ export function buildPromptFromMessages(
 	const effective = resolveEffectiveTools(tools, toolChoice);
 	const hasTools = effective.tools.length > 0;
 	const parts: string[] = [];
-	const lang = detectLang(messages);
 
 	if (hasTools) {
-		parts.push(buildToolPrompt(effective.tools, lang, effective.forceUse));
+		parts.push(buildToolPrompt(effective.tools, effective.forceUse));
 	}
 
 	for (const msg of messages) {
@@ -144,52 +160,95 @@ export function buildPromptFromMessages(
 	const lastMsg = messages[messages.length - 1];
 	const endsWithToolResult = lastMsg?.role === "tool" || (lastMsg as any)?.role === "function";
 	if (endsWithToolResult) {
-		parts.push(
-			lang === "cn"
-				? "请根据以上工具执行结果回答用户的问题。"
-				: "Please answer the user's question based on the tool results above.",
-		);
+		parts.push("Please answer the user's question based on the tool results above.");
 	}
 
 	return { prompt: parts.join("\n\n"), hasTools };
 }
 
+function describeCommand(command: string): string {
+	const firstLine =
+		command
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.find((line) => line.length > 0) ?? "shell command";
+	const cleaned = firstLine.replace(/^\$\s*/, "");
+	return `Run: ${cleaned}`.slice(0, 100);
+}
+
+function defaultValue(schema: JsonSchema | undefined): unknown {
+	switch (schema?.type) {
+		case "string":
+			return "";
+		case "number":
+		case "integer":
+			return 0;
+		case "boolean":
+			return false;
+		case "array":
+			return [];
+		case "object":
+			return {};
+		default:
+			return null;
+	}
+}
+
+function buildBashArguments(tool: ToolDefinition, command: string): Record<string, unknown> {
+	const schema = (tool.function.parameters ?? {}) as JsonSchema;
+	const properties = schema.properties ?? {};
+	const required = schema.required ?? [];
+	const args: Record<string, unknown> = {};
+
+	args.command = command;
+
+	if (properties.description) {
+		args.description = describeCommand(command);
+	}
+
+	for (const key of required) {
+		if (key in args) continue;
+		args[key] = defaultValue(properties[key]);
+	}
+
+	return args;
+}
+
 /**
- * Parse Claude's text response and detect tool calls.
- * Returns either tool_calls or plain text content.
- *
- * When tool_calls are detected, content is set to null per OpenAI standard
- * (GPT-4 returns content: null when making tool calls).
+ * Convert Bash code blocks in the model's response into native tool calls.
+ * If no Bash tool was requested, the response is returned unchanged.
  */
 export function parseToolResponse(
 	text: string,
 	requestedTools?: ToolDefinition[],
+	toolChoice?: ToolChoice,
 ): {
 	content: string | null;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 } {
-	if (!requestedTools || requestedTools.length === 0 || !hasToolCall(text)) {
+	const effective = resolveEffectiveTools(requestedTools, toolChoice);
+	const bashTool = findBashTool(effective.tools);
+
+	if (!bashTool) {
 		return { content: text, toolCalls: undefined, finishReason: "stop" };
 	}
 
-	const validToolNames = new Set(requestedTools.map((t) => t.function.name));
-	const parsed = extractToolCalls(text);
-	const validCalls = parsed.filter((c) => validToolNames.has(c.name));
-
-	if (validCalls.length === 0) {
+	const { commands, content } = extractBashBlocks(text);
+	if (commands.length === 0) {
 		return { content: text, toolCalls: undefined, finishReason: "stop" };
 	}
 
-	const toolCalls: ToolCallOutput[] = validCalls.map((call) => ({
+	const toolCalls: ToolCallOutput[] = commands.map((command) => ({
 		id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
 		type: "function" as const,
 		function: {
-			name: call.name,
-			arguments: JSON.stringify(call.arguments),
+			name: bashTool.function.name,
+			arguments: JSON.stringify(buildBashArguments(bashTool, command)),
 		},
 	}));
 
-	// Per OpenAI standard: content is null when assistant produces tool_calls
-	return { content: null, toolCalls, finishReason: "tool_calls" };
+	const prose = content.trim();
+
+	return { content: prose ? prose : null, toolCalls, finishReason: "tool_calls" };
 }

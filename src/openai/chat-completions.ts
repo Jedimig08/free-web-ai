@@ -96,7 +96,7 @@ async function handleNonStreaming(
 			// keep thinking for reasoning duplicate is okay, but avoid empty content
 		}
 		const { content, toolCalls, finishReason } = hasTools
-			? parseToolResponse(effectiveText, body.tools)
+			? parseToolResponse(effectiveText, body.tools, body.tool_choice)
 			: { content: effectiveText, toolCalls: undefined, finishReason: "stop" as const };
 
 		const promptTokens = estimateTokens(prompt);
@@ -321,10 +321,14 @@ async function streamWithTools(
 	if (!effectiveText && effectiveThinking) {
 		effectiveText = effectiveThinking;
 	}
-	const { content, toolCalls, finishReason } = parseToolResponse(effectiveText, body.tools);
+	const { content, toolCalls, finishReason } = parseToolResponse(
+		effectiveText,
+		body.tools,
+		body.tool_choice,
+	);
 
-	// If thinking exists and not a tool call, emit reasoning first
-	if (effectiveThinking && finishReason !== "tool_calls") {
+	// If thinking exists, emit reasoning before any content or tool calls.
+	if (effectiveThinking) {
 		w.writeChunk(id, model, [
 			{
 				index: 0,
@@ -335,6 +339,10 @@ async function streamWithTools(
 	}
 
 	if (finishReason === "tool_calls" && toolCalls) {
+		// Preserve any prose that surrounded the Bash blocks.
+		if (content) {
+			w.writeChunk(id, model, [{ index: 0, delta: { content }, finish_reason: null }]);
+		}
 		emitToolCallDeltas(w, id, model, toolCalls);
 		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
 	} else {

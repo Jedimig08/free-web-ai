@@ -103,7 +103,7 @@ describe("chat completions response format", () => {
 
 	test("tool_calls response has correct shape", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const toolResponse = '```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```';
+		const toolResponse = "I will list the files.\n\n```bash\nls\n```";
 		const mockClient = createMockClient(toolResponse);
 
 		const body: ChatCompletionRequest = {
@@ -113,9 +113,16 @@ describe("chat completions response format", () => {
 				{
 					type: "function",
 					function: {
-						name: "exec",
+						name: "bash",
 						description: "Run command",
-						parameters: { type: "object", properties: { command: { type: "string" } } },
+						parameters: {
+							type: "object",
+							properties: {
+								command: { type: "string" },
+								description: { type: "string" },
+							},
+							required: ["command", "description"],
+						},
 					},
 				},
 			],
@@ -126,11 +133,52 @@ describe("chat completions response format", () => {
 
 		const json = (await res.json()) as ChatCompletionResponse;
 		expect(json.choices[0]?.finish_reason).toBe("tool_calls");
-		expect(json.choices[0]?.message.content).toBeNull();
+		expect(json.choices[0]?.message.content).toBe("I will list the files.");
 		expect(json.choices[0]?.message.tool_calls).toHaveLength(1);
 		expect(json.choices[0]?.message.tool_calls?.[0]?.type).toBe("function");
 		expect(json.choices[0]?.message.tool_calls?.[0]?.id).toMatch(/^call_/);
-		expect(json.choices[0]?.message.tool_calls?.[0]?.function.name).toBe("exec");
+		expect(json.choices[0]?.message.tool_calls?.[0]?.function.name).toBe("bash");
+		expect(
+			JSON.parse(json.choices[0]?.message.tool_calls?.[0]?.function.arguments ?? "{}"),
+		).toEqual({ command: "ls", description: "Run: ls" });
+	});
+
+	test("streaming tool_calls response emits bash tool deltas", async () => {
+		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+		const mockClient = createMockClient("Checking now.\n\n```bash\ngit status\n```");
+
+		const body: ChatCompletionRequest = {
+			model: "test",
+			messages: [{ role: "user", content: "Show status" }],
+			stream: true,
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "bash",
+						description: "Run command",
+						parameters: {
+							type: "object",
+							properties: {
+								command: { type: "string" },
+								description: { type: "string" },
+							},
+							required: ["command", "description"],
+						},
+					},
+				},
+			],
+		};
+
+		const res = await handleChatCompletions(body, mockClient as any);
+		expect(res.status).toBe(200);
+
+		const text = await res.text();
+		expect(text).toContain('"tool_calls"');
+		expect(text).toContain('"name":"bash"');
+		expect(text).toContain('"finish_reason":"tool_calls"');
+		expect(text).toContain("Checking now.");
+		expect(text).not.toContain("```bash");
 	});
 
 	test("multi-turn tool flow (step 4: tool result → final answer)", async () => {
@@ -148,7 +196,10 @@ describe("chat completions response format", () => {
 						{
 							id: "call_abc123",
 							type: "function",
-							function: { name: "exec", arguments: '{"command":"ls"}' },
+							function: {
+								name: "bash",
+								arguments: '{"command":"ls","description":"List files"}',
+							},
 						},
 					],
 				},
