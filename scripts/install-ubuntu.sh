@@ -19,6 +19,7 @@ NO_SERVICE="${FREE_WEB_AI_NO_SERVICE:-0}"
 FORCE_HEADLESS="${FREE_WEB_AI_HEADLESS:-0}"
 WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
 NOVNC_PORT="${FREE_WEB_AI_NOVNC_PORT:-6080}"
+NOVNC_WEB_DIR="${FREE_WEB_AI_NOVNC_WEB_DIR:-/usr/share/novnc}"
 
 HEADLESS=0
 SYSTEMD_OK=0
@@ -70,6 +71,8 @@ Environment:
   OPENCODE_WEB_PORT         OpenCode web UI port (default: 4096)
   OPENCODE_SERVER_PASSWORD  Password for the OpenCode web UI
   FREE_WEB_AI_NOVNC_PORT    Browser login (noVNC) port (default: 6080)
+  FREE_WEB_AI_NOVNC_WEB_DIR noVNC web directory (default: /usr/share/novnc)
+  FREE_WEB_AI_PUBLIC_IP     IP address shown in login URLs (auto-detected)
 EOF
 }
 
@@ -584,6 +587,7 @@ start_opencode_web() {
 		if systemctl --user enable opencode-web.service >/dev/null 2>&1 &&
 			systemctl --user restart opencode-web.service >/dev/null 2>&1; then
 			log "OpenCode web service started."
+			print_web_urls
 			return
 		fi
 		warn "Could not start the OpenCode web systemd service; using a background process."
@@ -599,6 +603,7 @@ start_opencode_web() {
 			>"$web_log" 2>&1 &
 	)
 	log "OpenCode web started in the background; log: $web_log"
+	print_web_urls
 }
 
 verify_opencode_web() {
@@ -667,7 +672,7 @@ EOF
 	fi
 
 	websockify_bin="$(command -v websockify || true)"
-	novnc_dir="/usr/share/novnc"
+	novnc_dir="${NOVNC_WEB_DIR}"
 	if [[ -n "$websockify_bin" && -f "${novnc_dir}/vnc.html" ]]; then
 		cat >"${UNIT_DIR}/free-web-ai-novnc.service" <<EOF
 [Unit]
@@ -710,9 +715,9 @@ start_vnc_background() {
 
 start_novnc_background() {
 	command -v websockify >/dev/null 2>&1 || return 0
-	[[ -f /usr/share/novnc/vnc.html ]] || return 0
+	[[ -f "${NOVNC_WEB_DIR}/vnc.html" ]] || return 0
 	if ! pgrep -f "websockify.*${NOVNC_PORT}" >/dev/null 2>&1; then
-		nohup websockify --web=/usr/share/novnc "$NOVNC_PORT" 127.0.0.1:5900 \
+		nohup websockify --web="${NOVNC_WEB_DIR}" "$NOVNC_PORT" 127.0.0.1:5900 \
 			>"${GATEWAY_DIR}/novnc.log" 2>&1 &
 	fi
 }
@@ -747,25 +752,83 @@ prepare_headless() {
 	fi
 }
 
+novnc_available() {
+	command -v x11vnc >/dev/null 2>&1 &&
+		command -v websockify >/dev/null 2>&1 &&
+		[[ -f "${NOVNC_WEB_DIR}/vnc.html" ]]
+}
+
+print_web_urls() {
+	local primary others
+	primary="$(get_primary_ip)"
+	others="$(get_server_ips | tail -n +2 | paste -sd' ' -)"
+	printf 'OpenCode web UI: http://%s:%s\n' "$primary" "$WEB_PORT"
+	printf 'OpenCode web UI login: username "opencode", password in %s\n' "$WEB_ENV"
+	[[ -z "${others// /}" ]] || printf 'Other server IPs: %s\n' "$others"
+}
+
+get_primary_ip() {
+	if [[ -n "${FREE_WEB_AI_PUBLIC_IP:-}" ]]; then
+		printf '%s\n' "$FREE_WEB_AI_PUBLIC_IP"
+		return
+	fi
+
+	local ip
+	ip="$(ip -4 route get 1.1.1.1 2>/dev/null |
+		awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}' || true)"
+	if [[ -z "$ip" ]]; then
+		ip="$(hostname -I 2>/dev/null | tr ' ' '\n' |
+			grep -E '^[0-9]+(\.[0-9]+){3}$' | grep -v '^127\.' | head -n1 || true)"
+	fi
+	[[ -n "$ip" ]] || ip="$(hostname 2>/dev/null || echo localhost)"
+	printf '%s\n' "$ip"
+}
+
+get_server_ips() {
+	if [[ -n "${FREE_WEB_AI_PUBLIC_IP:-}" ]]; then
+		printf '%s\n' "$FREE_WEB_AI_PUBLIC_IP"
+		return
+	fi
+
+	local primary ip ips=""
+	primary="$(get_primary_ip)"
+	if command -v ip >/dev/null 2>&1; then
+		ips="$(ip -4 -o addr show scope global 2>/dev/null |
+			awk '$2 !~ /^(lo|docker|br-|virbr|veth|cni|podman|lxc)/ { split($4, a, "/"); print a[1] }' |
+			sort -u)"
+	fi
+	if [[ -z "$ips" ]]; then
+		ips="$(hostname -I 2>/dev/null | tr ' ' '\n' |
+			grep -E '^[0-9]+(\.[0-9]+){3}$' | grep -v '^127\.' | sort -u || true)"
+	fi
+	printf '%s\n' "$primary"
+	while IFS= read -r ip; do
+		[[ -z "$ip" || "$ip" == "$primary" ]] || printf '%s\n' "$ip"
+	done <<<"$ips"
+}
+
 print_vnc_help() {
 	if [[ "$HEADLESS" != "1" ]]; then
 		return
 	fi
 
-	local host server_ip
+	local host primary others
 	host="$(hostname 2>/dev/null || echo localhost)"
-	server_ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -m1 -v '^127\.' || true)"
-	[[ -n "$server_ip" ]] || server_ip="$host"
+	primary="$(get_primary_ip)"
+	others="$(get_server_ips | tail -n +2 | paste -sd' ' -)"
 
-	if command -v x11vnc >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1 && [[ -f /usr/share/novnc/vnc.html ]]; then
-		log "Open the browser login page from your computer:"
-		printf '  http://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$server_ip" "$NOVNC_PORT"
+	if novnc_available; then
+		log "ChatGPT login required — open this URL in your browser:"
+		printf '  http://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$primary" "$NOVNC_PORT"
+		[[ -z "${others// /}" ]] || printf '  (other server IPs: %s)\n' "$others"
 		printf '  VNC password: %s\n' "$VNC_PASSWORD"
 		printf 'If that port is blocked, tunnel it first:\n'
 		printf '  ssh -L %s:127.0.0.1:%s %s@%s\n' "$NOVNC_PORT" "$NOVNC_PORT" "${USER:-user}" "$host"
 		printf '  then open http://127.0.0.1:%s/vnc.html?autoconnect=1&resize=scale\n' "$NOVNC_PORT"
 	else
-		log "A virtual desktop is available on display :99."
+		log "ChatGPT login required — a virtual desktop is available on display :99."
+		printf 'Server IP: %s\n' "$primary"
+		[[ -z "${others// /}" ]] || printf 'Other server IPs: %s\n' "$others"
 		printf 'Connect with an SSH tunnel and a VNC client:\n'
 		printf '  ssh -L 5900:127.0.0.1:5900 %s@%s\n' "${USER:-user}" "$host"
 		printf '  then connect your VNC client to 127.0.0.1:5900\n'
@@ -787,8 +850,6 @@ login_chatgpt() {
 		return
 	fi
 
-	print_vnc_help
-
 	log "Starting Chrome for the ChatGPT login..."
 	if ! (
 		cd "$INSTALL_DIR"
@@ -797,6 +858,8 @@ login_chatgpt() {
 		warn "Could not start Chrome. Retry later with: cd \"$INSTALL_DIR\" && bun index.ts chrome start"
 		return
 	fi
+
+	print_vnc_help
 
 	log "Log in to ChatGPT in the browser window. The installer waits up to 5 minutes."
 	if (
@@ -900,13 +963,20 @@ verify_gateway() {
 }
 
 print_summary() {
+	local host primary others
+	host="$(hostname 2>/dev/null || echo localhost)"
+	primary="$(get_primary_ip)"
+	others="$(get_server_ips | tail -n +2 | paste -sd' ' -)"
+
 	printf '\n'
 	log "Installation completed."
 	printf 'Project:    %s\n' "$INSTALL_DIR"
 	printf 'Branch:     %s\n' "$BRANCH"
 	printf 'Gateway:    http://127.0.0.1:%s/v1\n' "$GATEWAY_PORT"
 	printf 'API key:    stored in %s\n' "$GATEWAY_CONFIG"
-	printf 'Web UI:     http://127.0.0.1:%s  (also on http://<server-ip>:%s)\n' "$WEB_PORT" "$WEB_PORT"
+	printf 'Server IP:  %s\n' "$primary"
+	[[ -z "${others// /}" ]] || printf 'Other IPs:  %s\n' "$others"
+	printf 'Web UI:     http://%s:%s\n' "$primary" "$WEB_PORT"
 	printf 'Web UI login: username "opencode", password in %s\n' "$WEB_ENV"
 	printf 'Config:     %s\n' "$OC_CONFIG"
 
@@ -927,18 +997,15 @@ print_summary() {
 	fi
 
 	if [[ "$HEADLESS" == "1" ]]; then
-		local host server_ip
-		host="$(hostname 2>/dev/null || echo localhost)"
-		server_ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -m1 -v '^127\.' || true)"
-		[[ -n "$server_ip" ]] || server_ip="$host"
-
-		printf '\nChatGPT browser login:\n'
-		if command -v x11vnc >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1 && [[ -f /usr/share/novnc/vnc.html ]]; then
-			printf '  http://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$server_ip" "$NOVNC_PORT"
+		printf '\nChatGPT browser login page:\n'
+		if novnc_available; then
+			printf '  http://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$primary" "$NOVNC_PORT"
+			[[ -z "${others// /}" ]] || printf '  (other server IPs: %s)\n' "$others"
 			printf '  VNC password: %s\n' "$VNC_PASSWORD"
 			printf '  Tunnel if needed: ssh -L %s:127.0.0.1:%s %s@%s\n' \
 				"$NOVNC_PORT" "$NOVNC_PORT" "${USER:-user}" "$host"
 		else
+			printf '  Server IP: %s\n' "$primary"
 			printf '  ssh -L 5900:127.0.0.1:5900 %s@%s\n' "${USER:-user}" "$host"
 			printf '  connect a VNC client to 127.0.0.1:5900\n'
 			printf '  VNC password: %s\n' "$VNC_PASSWORD"
