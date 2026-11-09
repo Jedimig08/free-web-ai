@@ -10,12 +10,15 @@ readonly GATEWAY_CONFIG="${GATEWAY_DIR}/config.json"
 readonly AUTH_PROFILES="${GATEWAY_DIR}/auth-profiles.json"
 readonly UNIT_DIR="${HOME}/.config/systemd/user"
 readonly WEB_ENV="${OPENCODE_CONFIG_DIR}/web.env"
+readonly VNC_PASS_FILE="${GATEWAY_DIR}/vnc.pass"
+readonly VNC_PASSWORD_FILE="${GATEWAY_DIR}/vnc-password.txt"
 
 INSTALL_DIR="${FREE_WEB_AI_DIR:-${DEFAULT_INSTALL_DIR}}"
 SKIP_LOGIN="${FREE_WEB_AI_SKIP_LOGIN:-0}"
 NO_SERVICE="${FREE_WEB_AI_NO_SERVICE:-0}"
 FORCE_HEADLESS="${FREE_WEB_AI_HEADLESS:-0}"
 WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
+NOVNC_PORT="${FREE_WEB_AI_NOVNC_PORT:-6080}"
 
 HEADLESS=0
 SYSTEMD_OK=0
@@ -25,6 +28,7 @@ GATEWAY_CDP_URL=""
 API_KEY=""
 OC_CONFIG=""
 WEB_PASSWORD=""
+VNC_PASSWORD=""
 
 trap 'printf "\n[free-web-ai installer] ERROR at line %s\n" "$LINENO" >&2' ERR
 
@@ -52,7 +56,7 @@ gateway service on Ubuntu/Debian.
 Options:
   --no-login      Do not run the interactive ChatGPT browser login.
   --no-service    Do not install/enable the systemd user service.
-  --headless      Force a virtual display + VNC session (no desktop needed).
+  --headless      Force a virtual display + browser login page (no desktop needed).
   -h, --help      Show this help.
 
 Environment:
@@ -65,6 +69,7 @@ Environment:
   TFG_CDP_URL               Chrome debug URL (default: http://127.0.0.1:9222)
   OPENCODE_WEB_PORT         OpenCode web UI port (default: 4096)
   OPENCODE_SERVER_PASSWORD  Password for the OpenCode web UI
+  FREE_WEB_AI_NOVNC_PORT    Browser login (noVNC) port (default: 6080)
 EOF
 }
 
@@ -129,6 +134,8 @@ install_system_dependencies() {
 	if [[ "$HEADLESS" == "1" ]]; then
 		apt_install xvfb || die "Could not install Xvfb."
 		apt_install x11vnc || warn "Could not install x11vnc; the virtual display will not be reachable remotely."
+		apt_install novnc websockify ||
+			warn "Could not install noVNC; the browser login page will be unavailable."
 	fi
 }
 
@@ -284,6 +291,37 @@ read_existing_gateway_config() {
 
 generate_api_key() {
 	bun -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))'
+}
+
+generate_vnc_password() {
+	bun -e '
+		const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+		const bytes = require("node:crypto").randomBytes(8);
+		let password = "";
+		for (const byte of bytes) password += alphabet[byte % alphabet.length];
+		process.stdout.write(password);
+	'
+}
+
+prepare_vnc_password() {
+	mkdir -p "$GATEWAY_DIR"
+	chmod 700 "$GATEWAY_DIR"
+
+	if [[ -f "$VNC_PASSWORD_FILE" ]]; then
+		VNC_PASSWORD="$(tr -d '\r\n' <"$VNC_PASSWORD_FILE")"
+	fi
+	if [[ ${#VNC_PASSWORD} -ne 8 ]]; then
+		VNC_PASSWORD="$(generate_vnc_password)"
+	fi
+
+	printf '%s\n' "$VNC_PASSWORD" >"$VNC_PASSWORD_FILE"
+	chmod 600 "$VNC_PASSWORD_FILE"
+
+	if command -v x11vnc >/dev/null 2>&1; then
+		x11vnc -storepasswd "$VNC_PASSWORD" "$VNC_PASS_FILE" >/dev/null 2>&1 ||
+			warn "Could not store the VNC password file."
+		chmod 600 "$VNC_PASS_FILE" 2>/dev/null || true
+	fi
 }
 
 write_gateway_config() {
@@ -593,7 +631,7 @@ systemd_user_available() {
 
 write_xvfb_units() {
 	mkdir -p "$UNIT_DIR"
-	cat > "${UNIT_DIR}/free-web-ai-xvfb.service" <<'EOF'
+	cat >"${UNIT_DIR}/free-web-ai-xvfb.service" <<'EOF'
 [Unit]
 Description=Virtual X display for Free Web AI
 After=network.target
@@ -608,10 +646,10 @@ RestartSec=3
 WantedBy=default.target
 EOF
 
-	local x11vnc_bin
+	local x11vnc_bin websockify_bin novnc_dir
 	x11vnc_bin="$(command -v x11vnc || true)"
 	if [[ -n "$x11vnc_bin" ]]; then
-		cat > "${UNIT_DIR}/free-web-ai-vnc.service" <<EOF
+		cat >"${UNIT_DIR}/free-web-ai-vnc.service" <<EOF
 [Unit]
 Description=VNC access to the Free Web AI virtual display
 After=free-web-ai-xvfb.service
@@ -619,7 +657,27 @@ Wants=free-web-ai-xvfb.service
 
 [Service]
 Type=simple
-ExecStart=${x11vnc_bin} -display :99 -localhost -forever -shared -nopw -rfbport 5900
+ExecStart=${x11vnc_bin} -display :99 -localhost -forever -shared -rfbauth ${VNC_PASS_FILE} -rfbport 5900
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+	fi
+
+	websockify_bin="$(command -v websockify || true)"
+	novnc_dir="/usr/share/novnc"
+	if [[ -n "$websockify_bin" && -f "${novnc_dir}/vnc.html" ]]; then
+		cat >"${UNIT_DIR}/free-web-ai-novnc.service" <<EOF
+[Unit]
+Description=Browser login for Free Web AI
+After=free-web-ai-vnc.service
+Wants=free-web-ai-vnc.service
+
+[Service]
+Type=simple
+ExecStart=${websockify_bin} --web=${novnc_dir} ${NOVNC_PORT} 127.0.0.1:5900
 Restart=on-failure
 RestartSec=3
 
@@ -645,14 +703,24 @@ start_xvfb_background() {
 start_vnc_background() {
 	command -v x11vnc >/dev/null 2>&1 || return 0
 	if ! pgrep -f "x11vnc.*-rfbport 5900" >/dev/null 2>&1; then
-		nohup x11vnc -display :99 -localhost -forever -shared -nopw -rfbport 5900 \
+		nohup x11vnc -display :99 -localhost -forever -shared -rfbauth "$VNC_PASS_FILE" -rfbport 5900 \
 			>"${GATEWAY_DIR}/x11vnc.log" 2>&1 &
+	fi
+}
+
+start_novnc_background() {
+	command -v websockify >/dev/null 2>&1 || return 0
+	[[ -f /usr/share/novnc/vnc.html ]] || return 0
+	if ! pgrep -f "websockify.*${NOVNC_PORT}" >/dev/null 2>&1; then
+		nohup websockify --web=/usr/share/novnc "$NOVNC_PORT" 127.0.0.1:5900 \
+			>"${GATEWAY_DIR}/novnc.log" 2>&1 &
 	fi
 }
 
 prepare_headless() {
 	export DISPLAY=:99
 	log "No graphical display detected; preparing a virtual display on :99..."
+	prepare_vnc_password
 
 	if [[ "$SYSTEMD_OK" == "1" ]]; then
 		write_xvfb_units
@@ -663,6 +731,10 @@ prepare_headless() {
 			systemctl --user enable --now free-web-ai-vnc.service ||
 				warn "Failed to start the VNC service."
 		fi
+		if [[ -f "${UNIT_DIR}/free-web-ai-novnc.service" ]]; then
+			systemctl --user enable --now free-web-ai-novnc.service ||
+				warn "Failed to start the noVNC service."
+		fi
 		local _i
 		for _i in {1..50}; do
 			[[ -S /tmp/.X11-unix/X99 ]] && break
@@ -671,6 +743,7 @@ prepare_headless() {
 	else
 		start_xvfb_background
 		start_vnc_background
+		start_novnc_background
 	fi
 }
 
@@ -679,12 +752,27 @@ print_vnc_help() {
 		return
 	fi
 
-	local host
+	local host server_ip
 	host="$(hostname 2>/dev/null || echo localhost)"
-	log "A virtual desktop is available on display :99."
-	printf 'Connect to it from your computer with an SSH tunnel:\n'
-	printf '  ssh -L 5900:127.0.0.1:5900 %s@%s\n' "${USER:-user}" "$host"
-	printf 'Then open your VNC client and connect to 127.0.0.1:5900.\n'
+	server_ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -m1 -v '^127\.' || true)"
+	[[ -n "$server_ip" ]] || server_ip="$host"
+
+	if command -v x11vnc >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1 && [[ -f /usr/share/novnc/vnc.html ]]; then
+		log "Open the browser login page from your computer:"
+		printf '  http://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$server_ip" "$NOVNC_PORT"
+		printf '  VNC password: %s\n' "$VNC_PASSWORD"
+		printf 'If that port is blocked, tunnel it first:\n'
+		printf '  ssh -L %s:127.0.0.1:%s %s@%s\n' "$NOVNC_PORT" "$NOVNC_PORT" "${USER:-user}" "$host"
+		printf '  then open http://127.0.0.1:%s/vnc.html?autoconnect=1&resize=scale\n' "$NOVNC_PORT"
+	else
+		log "A virtual desktop is available on display :99."
+		printf 'Connect with an SSH tunnel and a VNC client:\n'
+		printf '  ssh -L 5900:127.0.0.1:5900 %s@%s\n' "${USER:-user}" "$host"
+		printf '  then connect your VNC client to 127.0.0.1:5900\n'
+		if [[ -n "$VNC_PASSWORD" ]]; then
+			printf '  VNC password: %s\n' "$VNC_PASSWORD"
+		fi
+	fi
 }
 
 login_chatgpt() {
@@ -819,7 +907,7 @@ print_summary() {
 	printf 'Gateway:    http://127.0.0.1:%s/v1\n' "$GATEWAY_PORT"
 	printf 'API key:    stored in %s\n' "$GATEWAY_CONFIG"
 	printf 'Web UI:     http://127.0.0.1:%s  (also on http://<server-ip>:%s)\n' "$WEB_PORT" "$WEB_PORT"
-	printf 'Web login:  username "opencode", password in %s\n' "$WEB_ENV"
+	printf 'Web UI login: username "opencode", password in %s\n' "$WEB_ENV"
 	printf 'Config:     %s\n' "$OC_CONFIG"
 
 	if command -v opencode >/dev/null 2>&1; then
@@ -839,9 +927,22 @@ print_summary() {
 	fi
 
 	if [[ "$HEADLESS" == "1" ]]; then
-		printf '\nTo reach the virtual desktop again:\n'
-		printf '  ssh -L 5900:127.0.0.1:5900 %s@%s\n' "${USER:-user}" "$(hostname 2>/dev/null || echo localhost)"
-		printf '  connect a VNC client to 127.0.0.1:5900\n'
+		local host server_ip
+		host="$(hostname 2>/dev/null || echo localhost)"
+		server_ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -m1 -v '^127\.' || true)"
+		[[ -n "$server_ip" ]] || server_ip="$host"
+
+		printf '\nChatGPT browser login:\n'
+		if command -v x11vnc >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1 && [[ -f /usr/share/novnc/vnc.html ]]; then
+			printf '  http://%s:%s/vnc.html?autoconnect=1&resize=scale\n' "$server_ip" "$NOVNC_PORT"
+			printf '  VNC password: %s\n' "$VNC_PASSWORD"
+			printf '  Tunnel if needed: ssh -L %s:127.0.0.1:%s %s@%s\n' \
+				"$NOVNC_PORT" "$NOVNC_PORT" "${USER:-user}" "$host"
+		else
+			printf '  ssh -L 5900:127.0.0.1:5900 %s@%s\n' "${USER:-user}" "$host"
+			printf '  connect a VNC client to 127.0.0.1:5900\n'
+			printf '  VNC password: %s\n' "$VNC_PASSWORD"
+		fi
 	fi
 
 	printf '\nGateway management:\n'
