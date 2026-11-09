@@ -9,11 +9,13 @@ readonly GATEWAY_DIR="${HOME}/.token-free-gateway"
 readonly GATEWAY_CONFIG="${GATEWAY_DIR}/config.json"
 readonly AUTH_PROFILES="${GATEWAY_DIR}/auth-profiles.json"
 readonly UNIT_DIR="${HOME}/.config/systemd/user"
+readonly WEB_ENV="${OPENCODE_CONFIG_DIR}/web.env"
 
 INSTALL_DIR="${FREE_WEB_AI_DIR:-${DEFAULT_INSTALL_DIR}}"
 SKIP_LOGIN="${FREE_WEB_AI_SKIP_LOGIN:-0}"
 NO_SERVICE="${FREE_WEB_AI_NO_SERVICE:-0}"
 FORCE_HEADLESS="${FREE_WEB_AI_HEADLESS:-0}"
+WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
 
 HEADLESS=0
 SYSTEMD_OK=0
@@ -22,6 +24,7 @@ GATEWAY_PORT=""
 GATEWAY_CDP_URL=""
 API_KEY=""
 OC_CONFIG=""
+WEB_PASSWORD=""
 
 trap 'printf "\n[free-web-ai installer] ERROR at line %s\n" "$LINENO" >&2' ERR
 
@@ -60,6 +63,8 @@ Environment:
   TFG_PORT                  Gateway port (default: 3456)
   TFG_API_KEY               Use a specific gateway API key
   TFG_CDP_URL               Chrome debug URL (default: http://127.0.0.1:9222)
+  OPENCODE_WEB_PORT         OpenCode web UI port (default: 4096)
+  OPENCODE_SERVER_PASSWORD  Password for the OpenCode web UI
 EOF
 }
 
@@ -466,6 +471,114 @@ configure_opencode() {
 	'
 }
 
+read_existing_web_password() {
+	[[ -f "$WEB_ENV" ]] || return 0
+	(
+		set +u
+		# shellcheck disable=SC1090
+		. "$WEB_ENV" >/dev/null 2>&1 || true
+		printf '%s' "${OPENCODE_SERVER_PASSWORD:-}"
+	)
+}
+
+write_web_env() {
+	mkdir -p "$OPENCODE_CONFIG_DIR"
+	local tmp
+	tmp="$(mktemp)"
+	if [[ -f "$WEB_ENV" ]]; then
+		grep -vE '^(export[[:space:]]+)?OPENCODE_SERVER_PASSWORD=' "$WEB_ENV" >"$tmp" || true
+	fi
+	printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$WEB_PASSWORD" >>"$tmp"
+	mv "$tmp" "$WEB_ENV"
+	chmod 600 "$WEB_ENV"
+}
+
+write_opencode_web_unit() {
+	local opencode_bin="$1"
+	mkdir -p "$UNIT_DIR"
+	cat >"${UNIT_DIR}/opencode-web.service" <<EOF
+[Unit]
+Description=OpenCode Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=HOME=%h
+Environment="PATH=$(dirname "$opencode_bin"):${HOME}/.bun/bin:${HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=${WEB_ENV}
+ExecStart=${opencode_bin} serve --hostname 0.0.0.0 --port ${WEB_PORT} --print-logs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+start_opencode_web() {
+	local opencode_bin
+	opencode_bin="$(command -v opencode)" || die "OpenCode is not installed."
+
+	WEB_PASSWORD="${OPENCODE_SERVER_PASSWORD:-$(read_existing_web_password)}"
+	if [[ -z "$WEB_PASSWORD" ]]; then
+		WEB_PASSWORD="$(generate_api_key)"
+	fi
+	if [[ ! "$WEB_PASSWORD" =~ ^[A-Za-z0-9._~!@%^+=:-]+$ ]]; then
+		warn "The existing OpenCode web password contains unsupported characters; generating a new one."
+		WEB_PASSWORD="$(generate_api_key)"
+	fi
+	if [[ ${#WEB_PASSWORD} -lt 12 ]]; then
+		warn "The OpenCode web password is shorter than 12 characters; consider changing it in $WEB_ENV."
+	fi
+	write_web_env
+
+	log "Installing the OpenCode web service on port ${WEB_PORT}..."
+	if [[ "$NO_SERVICE" != "1" && "$SYSTEMD_OK" == "1" ]]; then
+		if command -v loginctl >/dev/null 2>&1; then
+			"${SUDO[@]}" loginctl enable-linger "$(id -un)" >/dev/null 2>&1 ||
+				warn "Could not enable systemd lingering; the web UI will stop when you log out."
+		fi
+
+		write_opencode_web_unit "$opencode_bin"
+		systemctl --user daemon-reload
+		if systemctl --user enable opencode-web.service >/dev/null 2>&1 &&
+			systemctl --user restart opencode-web.service >/dev/null 2>&1; then
+			log "OpenCode web service started."
+			return
+		fi
+		warn "Could not start the OpenCode web systemd service; using a background process."
+	fi
+
+	local web_log="${HOME}/opencode-web.log"
+	(
+		set -a
+		# shellcheck disable=SC1090
+		. "$WEB_ENV"
+		set +a
+		nohup "$opencode_bin" serve --hostname 0.0.0.0 --port "$WEB_PORT" --print-logs \
+			>"$web_log" 2>&1 &
+	)
+	log "OpenCode web started in the background; log: $web_log"
+}
+
+verify_opencode_web() {
+	local code="" _i
+	for _i in {1..30}; do
+		code="$(curl -s -o /dev/null -w '%{http_code}' \
+			-u "opencode:${WEB_PASSWORD}" "http://127.0.0.1:${WEB_PORT}/" 2>/dev/null || true)"
+		[[ "$code" == "200" ]] && break
+		sleep 0.5
+	done
+
+	if [[ "$code" == "200" ]]; then
+		log "OpenCode web UI is running on port ${WEB_PORT}."
+	else
+		warn "OpenCode web UI did not return HTTP 200 on port ${WEB_PORT} (got ${code:-no response})."
+	fi
+}
+
 systemd_user_available() {
 	[[ "$EUID" -ne 0 ]] || return 1
 	command -v systemctl >/dev/null 2>&1 || return 1
@@ -705,6 +818,8 @@ print_summary() {
 	printf 'Branch:     %s\n' "$BRANCH"
 	printf 'Gateway:    http://127.0.0.1:%s/v1\n' "$GATEWAY_PORT"
 	printf 'API key:    stored in %s\n' "$GATEWAY_CONFIG"
+	printf 'Web UI:     http://127.0.0.1:%s  (also on http://<server-ip>:%s)\n' "$WEB_PORT" "$WEB_PORT"
+	printf 'Web login:  username "opencode", password in %s\n' "$WEB_ENV"
 	printf 'Config:     %s\n' "$OC_CONFIG"
 
 	if command -v opencode >/dev/null 2>&1; then
@@ -733,6 +848,10 @@ print_summary() {
 	printf '  systemctl --user status free-web-ai-gateway.service   (service mode)\n'
 	printf '  systemctl --user restart free-web-ai-gateway.service  (service mode)\n'
 	printf '  cd "%s" && bun index.ts status                       (daemon mode)\n' "$INSTALL_DIR"
+	printf '\nOpenCode web management:\n'
+	printf '  systemctl --user status opencode-web.service\n'
+	printf '  systemctl --user restart opencode-web.service\n'
+	printf '  cat "%s"\n' "$WEB_ENV"
 }
 
 main() {
@@ -755,6 +874,8 @@ main() {
 		SYSTEMD_OK=1
 	fi
 
+	start_opencode_web
+
 	if [[ "$HEADLESS" == "1" ]]; then
 		prepare_headless
 	fi
@@ -762,6 +883,7 @@ main() {
 	login_chatgpt
 	start_gateway
 	verify_gateway
+	verify_opencode_web
 	print_summary
 }
 
