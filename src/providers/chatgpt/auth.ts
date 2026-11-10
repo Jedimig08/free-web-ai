@@ -56,6 +56,7 @@ export async function loginChatGPTWeb(params: {
 	return new Promise<ChatGPTWebAuth>((resolve, reject) => {
 		let capturedAccessToken: string | undefined;
 		let resolved = false;
+		let checkInterval: ReturnType<typeof setInterval> | undefined;
 
 		const timeout = setTimeout(() => {
 			if (!resolved) {
@@ -96,6 +97,7 @@ export async function loginChatGPTWeb(params: {
 					if (finalToken) {
 						resolved = true;
 						clearTimeout(timeout);
+						if (checkInterval) clearInterval(checkInterval);
 						console.log(`[ChatGPT] Access token captured!`);
 
 						const cookieString = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
@@ -146,9 +148,9 @@ export async function loginChatGPTWeb(params: {
 			reject(new Error("Browser window closed before login was captured."));
 		});
 
-		const checkInterval = setInterval(async () => {
+		checkInterval = setInterval(async () => {
 			await tryResolve();
-			if (resolved) {
+			if (resolved && checkInterval) {
 				clearInterval(checkInterval);
 			}
 		}, 2000);

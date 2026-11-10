@@ -1,5 +1,5 @@
 import { loadConfig } from "../config.ts";
-import { saveCredentials } from "../providers/auth-store.ts";
+import { getStorePath, saveCredentials } from "../providers/auth-store.ts";
 import { definition } from "../providers/chatgpt/index.ts";
 
 async function isChromeReady(): Promise<boolean> {
@@ -34,9 +34,12 @@ async function main() {
         throw new Error("ChatGPT login did not return credentials.");
     }
 
+    console.log("Saving credentials...");
     saveCredentials("chatgpt-web", credentials);
     console.log("\nChatGPT login successful!");
+    console.log(`Credentials saved to ${getStorePath()}`);
     console.log("You can now start the gateway.");
+    process.exit(0);
 }
 
 main().catch((error) => {

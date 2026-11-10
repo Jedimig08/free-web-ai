@@ -864,10 +864,13 @@ login_chatgpt() {
 	log "Log in to ChatGPT in the browser window. The installer waits up to 5 minutes."
 	if (
 		cd "$INSTALL_DIR"
-		bun index.ts webauth
+		timeout 330 bun index.ts webauth
 	); then
 		LOGIN_OK=1
 		log "ChatGPT credentials saved."
+	elif [[ -f "$AUTH_PROFILES" ]]; then
+		LOGIN_OK=1
+		warn "The login command did not exit cleanly, but credentials were saved."
 	else
 		warn "ChatGPT login was not completed."
 		warn "Retry after installation with: cd \"$INSTALL_DIR\" && bun index.ts webauth"
