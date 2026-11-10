@@ -20,6 +20,9 @@ FORCE_HEADLESS="${FREE_WEB_AI_HEADLESS:-0}"
 WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
 NOVNC_PORT="${FREE_WEB_AI_NOVNC_PORT:-6080}"
 NOVNC_WEB_DIR="${FREE_WEB_AI_NOVNC_WEB_DIR:-/usr/share/novnc}"
+FRONTPAGE="${FREE_WEB_AI_FRONTPAGE:-0}"
+FRONTPAGE_PORT="${FREE_WEB_AI_FRONTPAGE_PORT:-8080}"
+FRONTPAGE_DIR="${GATEWAY_DIR}/frontpage"
 
 HEADLESS=0
 SYSTEMD_OK=0
@@ -58,6 +61,9 @@ Options:
   --no-login      Do not run the interactive ChatGPT browser login.
   --no-service    Do not install/enable the systemd user service.
   --headless      Force a virtual display + browser login page (no desktop needed).
+  --frontpage     Install and start the optional pi3B frontpage.
+  --no-frontpage  Do not install the frontpage (default).
+  --frontpage-port PORT  Port for the frontpage server (default: 8080).
   -h, --help      Show this help.
 
 Environment:
@@ -65,6 +71,8 @@ Environment:
   FREE_WEB_AI_SKIP_LOGIN    Set to 1 to skip login
   FREE_WEB_AI_NO_SERVICE    Set to 1 to skip the systemd service
   FREE_WEB_AI_HEADLESS      Set to 1 to force headless mode
+  FREE_WEB_AI_FRONTPAGE     Set to 1 to install the pi3B frontpage
+  FREE_WEB_AI_FRONTPAGE_PORT Frontpage port (default: 8080)
   TFG_PORT                  Gateway port (default: 3456)
   TFG_API_KEY               Use a specific gateway API key
   TFG_CDP_URL               Chrome debug URL (default: http://127.0.0.1:9222)
@@ -82,11 +90,23 @@ parse_args() {
 			--no-login) SKIP_LOGIN=1 ;;
 			--no-service) NO_SERVICE=1 ;;
 			--headless) FORCE_HEADLESS=1 ;;
+			--frontpage) FRONTPAGE=1 ;;
+			--no-frontpage) FRONTPAGE=0 ;;
+			--frontpage-port)
+				[[ $# -ge 2 ]] || die "Missing value for --frontpage-port (use --help)"
+				FRONTPAGE_PORT="$2"
+				shift
+				;;
+			--frontpage-port=*) FRONTPAGE_PORT="${1#*=}" ;;
 			-h|--help) usage; exit 0 ;;
 			*) die "Unknown option: $1 (use --help)" ;;
 		esac
 		shift
 	done
+
+	if [[ ! "$FRONTPAGE_PORT" =~ ^[0-9]+$ ]] || (( FRONTPAGE_PORT < 1 || FRONTPAGE_PORT > 65535 )); then
+		die "Invalid frontpage port: $FRONTPAGE_PORT"
+	fi
 }
 
 require_linux() {
@@ -622,6 +642,87 @@ verify_opencode_web() {
 	fi
 }
 
+write_frontpage_unit() {
+	mkdir -p "$UNIT_DIR"
+	cat >"${UNIT_DIR}/pi3b-frontpage.service" <<EOF
+[Unit]
+Description=pi3B frontpage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${FRONTPAGE_DIR}
+ExecStart=${1} -m http.server ${FRONTPAGE_PORT} --bind 0.0.0.0 --directory ${FRONTPAGE_DIR}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+install_frontpage() {
+	[[ "$FRONTPAGE" == "1" ]] || return 0
+
+	local src python_bin log_file
+	src="${INSTALL_DIR}/frontpage/index.html"
+	if [[ ! -f "$src" ]]; then
+		warn "Frontpage files not found in ${INSTALL_DIR}; skipping."
+		return 0
+	fi
+
+	python_bin="$(command -v python3 || true)"
+	if [[ -z "$python_bin" ]]; then
+		warn "python3 is required to serve the frontpage; skipping."
+		return 0
+	fi
+
+	log "Installing the frontpage on port ${FRONTPAGE_PORT}..."
+	mkdir -p "$FRONTPAGE_DIR"
+	cp "$src" "${FRONTPAGE_DIR}/index.html"
+	printf '{"opencode":%s,"novnc":%s,"gateway":%s}\n' \
+		"$WEB_PORT" "$NOVNC_PORT" "$GATEWAY_PORT" >"${FRONTPAGE_DIR}/frontpage.json"
+
+	if [[ "$NO_SERVICE" != "1" && "$SYSTEMD_OK" == "1" ]]; then
+		write_frontpage_unit "$python_bin"
+		systemctl --user daemon-reload
+		if systemctl --user enable --now pi3b-frontpage.service >/dev/null 2>&1; then
+			log "Frontpage service started."
+			return
+		fi
+		warn "Could not start the frontpage systemd service; using a background process."
+	fi
+
+	if pgrep -f "http.server ${FRONTPAGE_PORT}.*${FRONTPAGE_DIR}" >/dev/null 2>&1; then
+		log "Frontpage is already running on port ${FRONTPAGE_PORT}."
+		return
+	fi
+
+	log_file="${GATEWAY_DIR}/frontpage.log"
+	nohup "$python_bin" -m http.server "$FRONTPAGE_PORT" --bind 0.0.0.0 \
+		--directory "$FRONTPAGE_DIR" >"$log_file" 2>&1 &
+	log "Frontpage started in the background; log: $log_file"
+}
+
+verify_frontpage() {
+	[[ "$FRONTPAGE" == "1" ]] || return 0
+
+	local code="" _i
+	for _i in {1..20}; do
+		code="$(curl -s -o /dev/null -w '%{http_code}' \
+			"http://127.0.0.1:${FRONTPAGE_PORT}/" 2>/dev/null || true)"
+		[[ "$code" == "200" ]] && break
+		sleep 0.5
+	done
+
+	if [[ "$code" == "200" ]]; then
+		log "Frontpage is running on port ${FRONTPAGE_PORT}."
+	else
+		warn "Frontpage did not return HTTP 200 on port ${FRONTPAGE_PORT} (got ${code:-no response})."
+	fi
+}
+
 systemd_user_available() {
 	[[ "$EUID" -ne 0 ]] || return 1
 	command -v systemctl >/dev/null 2>&1 || return 1
@@ -981,6 +1082,9 @@ print_summary() {
 	[[ -z "${others// /}" ]] || printf 'Other IPs:  %s\n' "$others"
 	printf 'Web UI:     http://%s:%s\n' "$primary" "$WEB_PORT"
 	printf 'Web UI login: username "opencode", password in %s\n' "$WEB_ENV"
+	if [[ "$FRONTPAGE" == "1" ]]; then
+		printf 'Frontpage:  http://%s:%s/\n' "$primary" "$FRONTPAGE_PORT"
+	fi
 	printf 'Config:     %s\n' "$OC_CONFIG"
 
 	if command -v opencode >/dev/null 2>&1; then
@@ -1023,6 +1127,12 @@ print_summary() {
 	printf '  systemctl --user status opencode-web.service\n'
 	printf '  systemctl --user restart opencode-web.service\n'
 	printf '  cat "%s"\n' "$WEB_ENV"
+
+	if [[ "$FRONTPAGE" == "1" ]]; then
+		printf '\nFrontpage management:\n'
+		printf '  systemctl --user status pi3b-frontpage.service\n'
+		printf '  systemctl --user restart pi3b-frontpage.service\n'
+	fi
 }
 
 main() {
@@ -1055,6 +1165,8 @@ main() {
 	start_gateway
 	verify_gateway
 	verify_opencode_web
+	install_frontpage
+	verify_frontpage
 	print_summary
 }
 
