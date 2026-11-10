@@ -1133,6 +1133,8 @@ print_summary() {
 		printf '  systemctl --user status pi3b-frontpage.service\n'
 		printf '  systemctl --user restart pi3b-frontpage.service\n'
 	fi
+
+	printf '\nOpenCode web UI password: %s\n' "$WEB_PASSWORD"
 }
 
 main() {
