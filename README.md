@@ -27,7 +27,23 @@ gateway.
 
 The branch ships a one-command installer that sets up Bun, OpenCode V2,
 Chromium, the gateway, the OpenCode web UI and, in headless mode, the noVNC
-login page:
+login page. It clones the branch to `~/free-web-ai`, so no checkout is needed
+first.
+
+On a fresh machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jedimig08/free-web-ai/all-permitions-chatgpt/scripts/install-ubuntu.sh -o install-ubuntu.sh
+bash install-ubuntu.sh
+```
+
+Add `--frontpage` (or any option below) when running it:
+
+```bash
+bash install-ubuntu.sh --frontpage
+```
+
+If you already have a checkout:
 
 ```bash
 cd ~/free-web-ai
