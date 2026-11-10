@@ -47,9 +47,23 @@ export async function loginChatGPTWeb(params: {
 	}
 
 	if (!page.url().includes("chatgpt.com") && !page.url().includes("chat.openai.com")) {
-		await page.goto("https://chatgpt.com/");
+		await page.goto("https://chatgpt.com/", { waitUntil: "domcontentloaded" });
 	}
-	const userAgent = await page.evaluate(() => navigator.userAgent);
+
+	let userAgent = "";
+	for (let i = 0; i < 5; i++) {
+		try {
+			await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+			userAgent = await page.evaluate(() => navigator.userAgent);
+			break;
+		} catch {
+			await new Promise((r) => setTimeout(r, 500));
+		}
+	}
+	if (!userAgent) {
+		userAgent =
+			"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+	}
 
 	params.onProgress("Please login to ChatGPT in the opened browser window...");
 
