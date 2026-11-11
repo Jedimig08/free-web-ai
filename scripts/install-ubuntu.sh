@@ -528,6 +528,38 @@ configure_opencode() {
 		if (!config.model) config.model = "free-web-ai/chatgpt-auto";
 		if (!config.small_model) config.small_model = config.model;
 
+		// Grant the AI full terminal access: auto-approve is handled by --auto on
+		// `opencode serve`; these explicit allow rules make the intent clear and
+		// keep working even when --auto is not passed.
+		const fullAccess = {
+			bash: "allow",
+			edit: "allow",
+			read: "allow",
+			glob: "allow",
+			grep: "allow",
+			list: "allow",
+			task: "allow",
+			external_directory: "allow",
+			webfetch: "allow",
+			websearch: "allow",
+			skill: "allow",
+			lsp: "allow",
+			todowrite: "allow",
+			question: "allow",
+			doom_loop: "allow",
+		};
+		config.permission = { ...(config.permission || {}), ...fullAccess };
+
+		// Apply the same full-access permission set to every configured agent.
+		if (config.agent && typeof config.agent === "object" && !Array.isArray(config.agent)) {
+			for (const name of Object.keys(config.agent)) {
+				const agent = config.agent[name];
+				if (agent && typeof agent === "object" && !Array.isArray(agent)) {
+					agent.permission = { ...(agent.permission || {}), ...fullAccess };
+				}
+			}
+		}
+
 		fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
 	'
 }
@@ -569,7 +601,7 @@ WorkingDirectory=%h
 Environment=HOME=%h
 Environment="PATH=$(dirname "$opencode_bin"):${HOME}/.bun/bin:${HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=${WEB_ENV}
-ExecStart=${opencode_bin} serve --hostname 0.0.0.0 --port ${WEB_PORT} --print-logs
+ExecStart=${opencode_bin} serve --hostname 0.0.0.0 --port ${WEB_PORT} --print-logs --auto
 Restart=on-failure
 RestartSec=5
 
@@ -619,7 +651,7 @@ start_opencode_web() {
 		# shellcheck disable=SC1090
 		. "$WEB_ENV"
 		set +a
-		nohup "$opencode_bin" serve --hostname 0.0.0.0 --port "$WEB_PORT" --print-logs \
+		nohup "$opencode_bin" serve --hostname 0.0.0.0 --port "$WEB_PORT" --print-logs --auto \
 			>"$web_log" 2>&1 &
 	)
 	log "OpenCode web started in the background; log: $web_log"
