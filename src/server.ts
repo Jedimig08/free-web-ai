@@ -9,9 +9,17 @@ import {
 	listAllModels,
 	resolveModelToProvider,
 } from "./providers/registry.ts";
+import { withTimeout } from "./providers/types.ts";
 
 const config = loadConfig();
 setRouteTimeoutSec(config.requestTimeoutSec);
+
+/**
+ * How long the browser teardown may block a stop/restart. `browser.close()`
+ * on a CDP-attached Chrome can stay pending forever (there is no remote
+ * handshake to acknowledge it), so the shutdown must never wait unbounded.
+ */
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
@@ -58,7 +66,6 @@ async function handleRequest(req: Request): Promise<Response> {
 		const modelId = decodeURIComponent(pathname.slice("/v1/models/".length));
 		return withCors(await handleModelByIdRoute(modelId));
 	}
-
 
 	return withCors(
 		Response.json(
@@ -168,10 +175,35 @@ console.log(
 	`Authorized providers: ${authorized.length > 0 ? authorized.join(", ") : "none — run 'token-free-gateway webauth' to authorize"}`,
 );
 
+let shuttingDown = false;
+
 async function gracefulShutdown(signal: string) {
+	if (shuttingDown) return;
+	shuttingDown = true;
 	console.log(`\nReceived ${signal}, shutting down...`);
-	await BrowserManager.getInstance().shutdown();
-	server.stop(true);
+
+	// Stop accepting connections first so in-flight requests are not cut off
+	// by the hard exit below.
+	try {
+		server.stop(true);
+	} catch {
+		// server may already be stopped
+	}
+
+	// Browser teardown can hang on a CDP-attached Chrome; bound it and exit
+	// regardless so systemd never needs to SIGKILL us after TimeoutStopSec.
+	try {
+		await withTimeout(
+			BrowserManager.getInstance().shutdown(),
+			SHUTDOWN_TIMEOUT_MS,
+			"Browser shutdown",
+		);
+	} catch {
+		console.warn(
+			`[server] Browser shutdown did not finish within ${SHUTDOWN_TIMEOUT_MS}ms, exiting anyway`,
+		);
+	}
+
 	process.exit(0);
 }
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));

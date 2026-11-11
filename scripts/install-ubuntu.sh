@@ -1047,6 +1047,10 @@ ExecStartPre=-${bun_bin} ${INSTALL_DIR}/index.ts chrome start
 ExecStart=${bun_bin} ${INSTALL_DIR}/index.ts serve
 Restart=on-failure
 RestartSec=5
+# The gateway exits on its own within ~5s; if it ever wedges, don't hold the
+# service hostage waiting out the default 90s stop timeout.
+TimeoutStopSec=10
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

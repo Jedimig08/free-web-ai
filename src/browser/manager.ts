@@ -108,20 +108,31 @@ class BrowserManager {
 
 	/**
 	 * Graceful shutdown: disconnect from Chrome without killing it.
+	 *
+	 * Chrome is attached over CDP and is not owned by this process, so
+	 * `browser.close()` can stay pending forever waiting for an acknowledgement
+	 * that never arrives. Drop our references first, then bound the close so a
+	 * stop/restart is never blocked by it.
 	 */
 	async shutdown(): Promise<void> {
-		if (this.browser) {
-			try {
-				this.browser.removeAllListeners("disconnected");
-				await this.browser.close().catch(() => {});
-			} catch {
-				// ignore
-			}
-		}
+		const browser = this.browser;
 		this.browser = null;
 		this.context = null;
 		this.disconnected = true;
 		this.connecting = null;
+		if (!browser) return;
+
+		try {
+			browser.removeAllListeners("disconnected");
+		} catch {
+			// ignore
+		}
+
+		const BROWSER_CLOSE_TIMEOUT_MS = 2_000;
+		await Promise.race([
+			browser.close().catch(() => {}),
+			new Promise<void>((resolve) => setTimeout(resolve, BROWSER_CLOSE_TIMEOUT_MS)),
+		]);
 	}
 
 	// ── internal ──────────────────────────────────────────────────────
