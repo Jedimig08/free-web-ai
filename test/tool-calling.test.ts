@@ -142,6 +142,16 @@ describe("buildPromptFromMessages", () => {
 		expect(prompt).not.toContain("tool_json");
 	});
 
+	test("includes anti-hallucination rules for tool calls", () => {
+		const messages: ChatMessage[] = [{ role: "user", content: "What is the hostname?" }];
+		const { prompt } = buildPromptFromMessages(messages, [BASH_TOOL]);
+
+		expect(prompt).toContain("Never describe, simulate or invent command output");
+		expect(prompt).toContain("Never claim a command was run unless you wrote a bash block");
+		expect(prompt).toContain("reply with the bash block and nothing else");
+		expect(prompt).toContain("not inside a sandbox or container");
+	});
+
 	test("tool_choice none disables tools", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
 		const { prompt, hasTools } = buildPromptFromMessages(messages, [BASH_TOOL], "none");

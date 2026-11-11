@@ -50,6 +50,13 @@ const BASH_EXAMPLE = [
 	"```",
 ].join("\n");
 
+const ANTI_HALLUCINATION_RULES = [
+	"- Never describe, simulate or invent command output.",
+	"- Never claim a command was run unless you wrote a bash block for it.",
+	"- If you need a fact about the machine, reply with the bash block and nothing else.",
+	"- The tools run on the user's real machine, not inside a sandbox or container.",
+];
+
 export function buildToolPrompt(tools: ToolDefinition[], forceUse = false): string {
 	const defs = toolDefsForPrompt(tools);
 	const bashDef = bashToolDefinitionForPrompt(tools);
@@ -72,6 +79,7 @@ export function buildToolPrompt(tools: ToolDefinition[], forceUse = false): stri
 			"- The opening fence must be followed by the label `bash` (for example, ```bash).",
 			"- Put only the command inside the block. Do not include command output.",
 			"- If no tool is needed, answer normally without a bash block.",
+			...ANTI_HALLUCINATION_RULES,
 			"",
 			"Bash tool definition:",
 			bashDef,
