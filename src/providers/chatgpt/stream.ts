@@ -47,6 +47,14 @@ function stripEntityTags(text: string): string {
 	return out;
 }
 
+/** Length of the longest common prefix of two strings. */
+function commonPrefixLen(a: string, b: string): number {
+	const limit = Math.min(a.length, b.length);
+	let i = 0;
+	while (i < limit && a.charCodeAt(i) === b.charCodeAt(i)) i++;
+	return i;
+}
+
 export async function parseChatGPTStream(
 	body: ReadableStream<Uint8Array>,
 	onDelta?: (delta: string) => void,
@@ -55,9 +63,15 @@ export async function parseChatGPTStream(
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
-	let accumulatedContent = "";
 	let text = "";
 	let thinkingText = "";
+	// Watermarks of every byte already consumed per output channel. They are
+	// used to turn cumulative snapshots (which ChatGPT sends in several
+	// different shapes) into plain deltas without ever re-emitting text.
+	let seenText = "";
+	let seenThinking = "";
+	// Current value of every JSON-patch path (the "p"/"v" stream dialect).
+	const patchValues = new Map<string, string>();
 
 	// Tag-based thinking detection (like deepseek-reasoner / qwen)
 	let currentMode: "text" | "thinking" = "text";
@@ -77,13 +91,16 @@ export async function parseChatGPTStream(
 	const pushDelta = (delta: string, forceType?: "text" | "thinking") => {
 		if (!delta) return;
 		if (forceType === "thinking") {
+			seenThinking += delta;
 			emitThinking(delta);
 			return;
 		}
 		if (forceType === "text") {
+			seenText += delta;
 			emitText(delta);
 			return;
 		}
+		seenText += delta;
 		tagBuffer += delta;
 
 		const checkTags = () => {
@@ -143,6 +160,91 @@ export async function parseChatGPTStream(
 		tagBuffer = "";
 	};
 
+	/**
+	 * Emit only the part of `value` that has not been consumed yet.
+	 *
+	 * ChatGPT transports the answer in several different shapes, and the
+	 * shapes do not agree on whether a value is a delta or a full snapshot:
+	 *
+	 *   - `message.content.parts[0]`               → cumulative snapshot
+	 *   - `{ p: "/message/content/parts/0", v }`   → JSON patch, append OR replace
+	 *   - `v: [{ content }]`                       → usually a snapshot
+	 *   - plain `content` / `text` / `v` strings   → delta or snapshot
+	 *
+	 * Treating a snapshot as a delta appends the whole answer again, which is
+	 * what produced the interleaved duplicate replies. Everything that can be
+	 * a snapshot therefore goes through here, sized against the watermark of
+	 * what we already emitted.
+	 */
+	const pushSnapshot = (value: string) => {
+		if (!value) return;
+		if (value.length <= seenText.length && seenText.startsWith(value)) {
+			// Rewind or replay of an already emitted prefix — nothing new.
+			return;
+		}
+		if (value.startsWith(seenText)) {
+			pushDelta(value.slice(seenText.length));
+			return;
+		}
+		// Diverged/rewritten snapshot: emit the changed suffix only.
+		pushDelta(value.slice(commonPrefixLen(value, seenText)));
+	};
+
+	const pushThinkingSnapshot = (value: string) => {
+		if (!value) return;
+		if (value.length <= seenThinking.length && seenThinking.startsWith(value)) {
+			return;
+		}
+		if (value.startsWith(seenThinking)) {
+			pushDelta(value.slice(seenThinking.length), "thinking");
+			return;
+		}
+		pushDelta(value.slice(commonPrefixLen(value, seenThinking)), "thinking");
+	};
+
+	/**
+	 * Ambiguous channel: accept both deltas and cumulative snapshots.
+	 * A delta can never start with the *entire* text emitted so far, so this
+	 * is safe for both and still de-duplicates snapshots.
+	 */
+	const pushAuto = (value: string) => {
+		if (!value) return;
+		if (value.length > seenText.length && value.startsWith(seenText)) {
+			pushDelta(value.slice(seenText.length));
+			return;
+		}
+		pushDelta(value);
+	};
+
+	/** Apply one `{ p, o, v }` JSON-patch event. */
+	const applyPatch = (path: string, op: string | undefined, value: string) => {
+		if (!value) return;
+		const isThinking = /reasoning|thinking|thought/i.test(path);
+		const seen = isThinking ? seenThinking : seenText;
+		const previous = patchValues.get(path) ?? "";
+
+		if (op === "append") {
+			const next = previous + value;
+			patchValues.set(path, next);
+			// Only emit what the global watermark has not seen yet, so a
+			// replayed append cannot duplicate text.
+			let delta = value;
+			if (next.length <= seen.length && seen.startsWith(next)) delta = "";
+			else if (next.length > seen.length && next.startsWith(seen)) delta = next.slice(seen.length);
+			if (!delta) return;
+			if (isThinking) pushDelta(delta, "thinking");
+			else pushDelta(delta);
+			return;
+		}
+
+		// "replace"/"add"/missing op: `value` is the complete new value for
+		// this path. Diff it against the *global* watermark so snapshots from
+		// different channels can never be emitted twice.
+		patchValues.set(path, value);
+		if (isThinking) pushThinkingSnapshot(value);
+		else pushSnapshot(value);
+	};
+
 	const processLine = (line: string) => {
 		if (!line?.startsWith("data: ")) {
 			return;
@@ -183,18 +285,18 @@ export async function parseChatGPTStream(
 			}
 
 			// --- Structured thinking fields (deepseek-like / openai-like) ---
-			// p/v reasoning channel (DeepSeek style, also possible for ChatGPT)
+			// p/v reasoning channel (DeepSeek style, also possible for ChatGPT).
+			// `v` may be an append delta OR the complete new value (o: "replace"),
+			// so it has to go through the patch handler.
 			const pField = data.p as string | undefined;
 			const pStr = typeof pField === "string" ? pField : "";
-			if (
-				(pStr.includes("reasoning") || pStr.includes("thinking") || data.type === "thinking") &&
-				typeof data.v === "string"
-			) {
-				pushDelta(data.v, "thinking");
+			const opField = typeof data.o === "string" ? data.o : undefined;
+			if (pStr && typeof data.v === "string" && /reasoning|thinking|thought/i.test(pStr)) {
+				applyPatch(pStr, opField, data.v);
 				return;
 			}
 			if (data.type === "thinking" && typeof data.content === "string") {
-				pushDelta(data.content, "thinking");
+				pushThinkingSnapshot(data.content);
 				return;
 			}
 
@@ -231,18 +333,30 @@ export async function parseChatGPTStream(
 				}
 			}
 
-			// v as array with THINKING fragments
+			// v as array of fragments (snapshot of the parts array). Each entry may
+			// be a full value, so feed them through the patch/snapshot logic.
 			if (Array.isArray(data.v)) {
 				let handled = false;
-				for (const frag of data.v as Array<Record<string, unknown>>) {
-					if (frag.type === "THINKING" || frag.type === "reasoning" || frag.type === "thinking") {
-						pushDelta(String(frag.content || ""), "thinking");
-						handled = true;
-					} else if (frag.content) {
-						pushDelta(String(frag.content));
-						handled = true;
+				(data.v as Array<Record<string, unknown>>).forEach((frag, index) => {
+					const content = String(frag.content ?? frag.text ?? "");
+					if (!content) return;
+					const isThinking =
+						frag.type === "THINKING" || frag.type === "reasoning" || frag.type === "thinking";
+					if (isThinking) {
+						applyPatch(
+							`/v/${index}/thinking`,
+							typeof frag.o === "string" ? frag.o : undefined,
+							content,
+						);
+					} else {
+						applyPatch(
+							`/v/${index}/content`,
+							typeof frag.o === "string" ? frag.o : undefined,
+							content,
+						);
 					}
-				}
+					handled = true;
+				});
 				if (handled) return;
 			}
 
@@ -261,21 +375,21 @@ export async function parseChatGPTStream(
 						(typeof c.text === "string" && c.text) ||
 						"";
 					if (thoughtStr) {
-						pushDelta(thoughtStr, "thinking");
+						pushThinkingSnapshot(thoughtStr);
 						return;
 					}
 					// parts may contain thinking strings
 					const partsThinking = c.parts as unknown[] | undefined;
 					if (Array.isArray(partsThinking) && partsThinking.length > 0) {
 						for (const p of partsThinking) {
-							if (typeof p === "string" && p) pushDelta(p, "thinking");
+							if (typeof p === "string" && p) pushThinkingSnapshot(p);
 							else if (
 								typeof p === "object" &&
 								p !== null &&
 								"text" in p &&
 								typeof (p as { text?: string }).text === "string"
 							) {
-								pushDelta((p as { text: string }).text, "thinking");
+								pushThinkingSnapshot((p as { text: string }).text);
 							}
 						}
 						return;
@@ -291,7 +405,7 @@ export async function parseChatGPTStream(
 						(typeof m.thought === "string" && m.thought) ||
 						"";
 					if (metaThinking) {
-						pushDelta(metaThinking, "thinking");
+						pushThinkingSnapshot(metaThinking);
 						// don't return, also process content below
 					}
 				}
@@ -315,37 +429,32 @@ export async function parseChatGPTStream(
 							? (rawPart as { text: string }).text
 							: undefined;
 				if (typeof content === "string" && content) {
-					// Delta detection via accumulatedContent slicing (ChatGPT sends full content each time)
-					// But content may also contain think tags inline.
-					const delta = content.slice(accumulatedContent.length);
-					if (delta) {
-						accumulatedContent = content;
-						pushDelta(delta);
-					} else if (content.length < accumulatedContent.length) {
-						// Content was reset (new message) - treat as new
-						accumulatedContent = content;
-						pushDelta(content);
-					}
+					// ChatGPT resends the whole message so far on every event.
+					// pushSnapshot() converts that into deltas and ignores replays.
+					// Content may also contain think tags inline (handled by pushDelta).
+					pushSnapshot(content);
 					return;
 				}
 			}
 
 			// Generic fallback: data.text / data.content / data.delta strange shapes
 			if (typeof data.text === "string" && data.text) {
-				pushDelta(data.text);
+				pushAuto(data.text);
 				return;
 			}
 			if (typeof data.content === "string" && data.content) {
 				// If not already handled as thinking, treat as text but also check for think tags
-				pushDelta(data.content);
+				pushAuto(data.content);
 				return;
 			}
-			// Direct string v without p (content channel)
+			// Direct string v (content channel). Could be an append delta or a
+			// replace snapshot depending on the dialect, so disambiguate.
 			if (
 				typeof data.v === "string" &&
 				(!pField || pStr.includes("content") || pStr.includes("choices"))
 			) {
-				pushDelta(data.v);
+				if (pStr) applyPatch(pStr, opField, data.v);
+				else pushAuto(data.v);
 				return;
 			}
 			if (data.type === "text" && typeof data.content === "string") {
