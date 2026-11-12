@@ -12,6 +12,9 @@ readonly UNIT_DIR="${HOME}/.config/systemd/user"
 readonly WEB_ENV="${OPENCODE_CONFIG_DIR}/web.env"
 readonly VNC_PASS_FILE="${GATEWAY_DIR}/vnc.pass"
 readonly VNC_PASSWORD_FILE="${GATEWAY_DIR}/vnc-password.txt"
+readonly OPENHANDS_ENV="${GATEWAY_DIR}/openhands.env"
+readonly OPENHANDS_API_KEY_FILE="${HOME}/.openhands/agent-canvas/api-key.txt"
+readonly NODE_MAJOR="${FREE_WEB_AI_NODE_MAJOR:-24}"
 
 INSTALL_DIR="${FREE_WEB_AI_DIR:-${DEFAULT_INSTALL_DIR}}"
 SKIP_LOGIN="${FREE_WEB_AI_SKIP_LOGIN:-0}"
@@ -23,6 +26,9 @@ NOVNC_WEB_DIR="${FREE_WEB_AI_NOVNC_WEB_DIR:-/usr/share/novnc}"
 FRONTPAGE="${FREE_WEB_AI_FRONTPAGE:-0}"
 FRONTPAGE_PORT="${FREE_WEB_AI_FRONTPAGE_PORT:-8080}"
 FRONTPAGE_DIR="${GATEWAY_DIR}/frontpage"
+OPENHANDS_ENABLED="${FREE_WEB_AI_OPENHANDS:-1}"
+OPENHANDS_PORT="${FREE_WEB_AI_OPENHANDS_PORT:-8000}"
+OPENHANDS_RECONFIGURE="${FREE_WEB_AI_OPENHANDS_RECONFIGURE:-0}"
 
 HEADLESS=0
 SYSTEMD_OK=0
@@ -33,6 +39,8 @@ API_KEY=""
 OC_CONFIG=""
 WEB_PASSWORD=""
 VNC_PASSWORD=""
+OPENHANDS_API_KEY=""
+OPENHANDS_READY=0
 
 trap 'printf "\n[free-web-ai installer] ERROR at line %s\n" "$LINENO" >&2' ERR
 
@@ -53,9 +61,11 @@ usage() {
 	cat <<'EOF'
 Usage: scripts/install-ubuntu.sh [options]
 
-Installs Bun, OpenCode V2, Chromium, the free-web-ai project, a generated
-gateway API key, the OpenCode provider config, the browser login and the
-gateway service on Ubuntu/Debian.
+Installs Bun, Node.js, uv, OpenCode V2, OpenHands Agent Canvas, Chromium, the
+free-web-ai project, a generated gateway API key, the OpenCode provider config,
+the browser login, the gateway service and the OpenHands control plane on
+Ubuntu/Debian. OpenCode is registered with OpenHands through the Agent Client
+Protocol (ACP).
 
 Options:
   --no-login      Do not run the interactive ChatGPT browser login.
@@ -64,6 +74,9 @@ Options:
   --frontpage     Install and start the optional pi3B frontpage.
   --no-frontpage  Do not install the frontpage (default).
   --frontpage-port PORT  Port for the frontpage server (default: 8080).
+  --no-openhands  Do not install OpenHands Agent Canvas.
+  --openhands-port PORT  Port for the OpenHands web UI (default: 8000).
+  --reconfigure-openhands  Overwrite the generated OpenHands LLM/ACP profiles.
   -h, --help      Show this help.
 
 Environment:
@@ -73,6 +86,10 @@ Environment:
   FREE_WEB_AI_HEADLESS      Set to 1 to force headless mode
   FREE_WEB_AI_FRONTPAGE     Set to 1 to install the pi3B frontpage
   FREE_WEB_AI_FRONTPAGE_PORT Frontpage port (default: 8080)
+  FREE_WEB_AI_OPENHANDS     Set to 0 to skip OpenHands
+  FREE_WEB_AI_OPENHANDS_PORT OpenHands web UI port (default: 8000)
+  FREE_WEB_AI_OPENHANDS_RECONFIGURE Set to 1 to overwrite generated profiles
+  FREE_WEB_AI_NODE_MAJOR    Node.js major version (default: 24)
   TFG_PORT                  Gateway port (default: 3456)
   TFG_API_KEY               Use a specific gateway API key
   TFG_CDP_URL               Chrome debug URL (default: http://127.0.0.1:9222)
@@ -98,6 +115,14 @@ parse_args() {
 				shift
 				;;
 			--frontpage-port=*) FRONTPAGE_PORT="${1#*=}" ;;
+			--no-openhands) OPENHANDS_ENABLED=0 ;;
+			--openhands-port)
+				[[ $# -ge 2 ]] || die "Missing value for --openhands-port (use --help)"
+				OPENHANDS_PORT="$2"
+				shift
+				;;
+			--openhands-port=*) OPENHANDS_PORT="${1#*=}" ;;
+			--reconfigure-openhands) OPENHANDS_RECONFIGURE=1 ;;
 			-h|--help) usage; exit 0 ;;
 			*) die "Unknown option: $1 (use --help)" ;;
 		esac
@@ -106,6 +131,9 @@ parse_args() {
 
 	if [[ ! "$FRONTPAGE_PORT" =~ ^[0-9]+$ ]] || (( FRONTPAGE_PORT < 1 || FRONTPAGE_PORT > 65535 )); then
 		die "Invalid frontpage port: $FRONTPAGE_PORT"
+	fi
+	if [[ ! "$OPENHANDS_PORT" =~ ^[0-9]+$ ]] || (( OPENHANDS_PORT < 1 || OPENHANDS_PORT > 65535 )); then
+		die "Invalid OpenHands port: $OPENHANDS_PORT"
 	fi
 }
 
@@ -153,7 +181,7 @@ install_system_dependencies() {
 	log "Installing system dependencies..."
 	apt_update
 
-	apt_install git curl unzip ca-certificates procps
+	apt_install git curl unzip ca-certificates procps gnupg
 	if [[ "$HEADLESS" == "1" ]]; then
 		apt_install xvfb || die "Could not install Xvfb."
 		apt_install x11vnc || warn "Could not install x11vnc; the virtual display will not be reachable remotely."
@@ -172,6 +200,7 @@ ensure_shell_path() {
 export BUN_INSTALL=\"${BUN_INSTALL}\"
 case \":\${PATH}:\" in *\":\${BUN_INSTALL}/bin:\"*) ;; *) export PATH=\"\${BUN_INSTALL}/bin:\${PATH}\" ;; esac
 case \":\${PATH}:\" in *\":\${HOME}/.opencode/bin:\"*) ;; *) export PATH=\"\${HOME}/.opencode/bin:\${PATH}\" ;; esac
+case \":\${PATH}:\" in *\":\${HOME}/.local/bin:\"*) ;; *) export PATH=\"\${HOME}/.local/bin:\${PATH}\" ;; esac
 # <<< free-web-ai installer <<<"
 
 	local rc
@@ -197,6 +226,61 @@ install_opencode() {
 	export PATH="${HOME}/.opencode/bin:${HOME}/.local/bin:${HOME}/bin:${PATH}"
 	command -v opencode >/dev/null 2>&1 ||
 		die "OpenCode was installed but is not available on PATH. Open a new login shell and rerun this script."
+}
+
+install_node() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	local current_major=""
+	if command -v node >/dev/null 2>&1; then
+		current_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+	fi
+	if [[ "$current_major" =~ ^[0-9]+$ ]] && (( current_major >= NODE_MAJOR )) &&
+		command -v npm >/dev/null 2>&1; then
+		log "Node.js $(node --version) is already installed."
+		return 0
+	fi
+
+	log "Installing Node.js ${NODE_MAJOR}.x from NodeSource..."
+	local setup
+	setup="$(mktemp)"
+	curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o "$setup" ||
+		die "Could not download the NodeSource setup script."
+	"${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive bash "$setup"
+	rm -f "$setup"
+	apt_install nodejs
+	command -v node >/dev/null 2>&1 ||
+		die "Node.js was installed but is not available on PATH."
+	command -v npm >/dev/null 2>&1 ||
+		die "npm was installed but is not available on PATH."
+}
+
+install_uv() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	if command -v uv >/dev/null 2>&1 && command -v uvx >/dev/null 2>&1; then
+		log "uv is already installed."
+		return 0
+	fi
+
+	log "Installing uv..."
+	curl -LsSf https://astral.sh/uv/install.sh | sh
+	export PATH="${HOME}/.local/bin:${PATH}"
+	command -v uv >/dev/null 2>&1 && command -v uvx >/dev/null 2>&1 ||
+		die "uv was installed but is not available on PATH. Open a new login shell and rerun this script."
+}
+
+install_openhands() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	command -v npm >/dev/null 2>&1 ||
+		die "npm is required to install OpenHands Agent Canvas."
+	log "Installing/updating OpenHands Agent Canvas..."
+	npm install --global --prefix "${HOME}/.local" --no-fund --no-audit \
+		@openhands/agent-canvas
+	export PATH="${HOME}/.local/bin:${PATH}"
+	command -v agent-canvas >/dev/null 2>&1 ||
+		die "OpenHands Agent Canvas was installed but 'agent-canvas' is not available on PATH."
 }
 
 install_project() {
@@ -674,6 +758,151 @@ verify_opencode_web() {
 	fi
 }
 
+prepare_openhands_key() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	mkdir -p "$GATEWAY_DIR" "$(dirname "$OPENHANDS_API_KEY_FILE")"
+
+	local existing=""
+	if [[ -f "$OPENHANDS_ENV" ]]; then
+		existing="$(awk -F= '/^LOCAL_BACKEND_API_KEY=/{sub(/^LOCAL_BACKEND_API_KEY=/, ""); value=$0} END{print value}' "$OPENHANDS_ENV")"
+	fi
+	if [[ -z "$existing" && -f "$OPENHANDS_API_KEY_FILE" ]]; then
+		existing="$(tr -d '\r\n' <"$OPENHANDS_API_KEY_FILE")"
+	fi
+
+	OPENHANDS_API_KEY="${FREE_WEB_AI_OPENHANDS_API_KEY:-${existing}}"
+	if [[ -z "$OPENHANDS_API_KEY" ]]; then
+		OPENHANDS_API_KEY="$(generate_api_key)"
+	fi
+
+	printf 'LOCAL_BACKEND_API_KEY=%s\n' "$OPENHANDS_API_KEY" >"$OPENHANDS_ENV"
+	chmod 600 "$OPENHANDS_ENV"
+	printf '%s\n' "$OPENHANDS_API_KEY" >"$OPENHANDS_API_KEY_FILE"
+	chmod 600 "$OPENHANDS_API_KEY_FILE"
+}
+
+write_openhands_unit() {
+	local agent_canvas_bin="$1"
+	mkdir -p "$UNIT_DIR"
+	cat >"${UNIT_DIR}/openhands-canvas.service" <<EOF
+[Unit]
+Description=OpenHands Agent Canvas
+After=network-online.target free-web-ai-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=HOME=%h
+Environment="PATH=$(dirname "$agent_canvas_bin"):${HOME}/.local/bin:${HOME}/.bun/bin:${HOME}/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment=DO_NOT_TRACK=1
+Environment=VITE_DO_NOT_TRACK=1
+EnvironmentFile=${OPENHANDS_ENV}
+ExecStart=${agent_canvas_bin} --port ${OPENHANDS_PORT} --host 0.0.0.0 --public
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+start_openhands() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	local agent_canvas_bin
+	agent_canvas_bin="$(command -v agent-canvas)" ||
+		die "OpenHands Agent Canvas is not installed."
+
+	log "Installing the OpenHands Agent Canvas service on port ${OPENHANDS_PORT}..."
+	if [[ "$NO_SERVICE" != "1" && "$SYSTEMD_OK" == "1" ]]; then
+		if command -v loginctl >/dev/null 2>&1; then
+			"${SUDO[@]}" loginctl enable-linger "$(id -un)" >/dev/null 2>&1 ||
+				warn "Could not enable systemd lingering; OpenHands will stop when you log out."
+		fi
+
+		write_openhands_unit "$agent_canvas_bin"
+		systemctl --user daemon-reload
+		if systemctl --user enable --now openhands-canvas.service >/dev/null 2>&1; then
+			log "OpenHands Agent Canvas service started."
+			return 0
+		fi
+		warn "Could not start the OpenHands systemd service; using a background process."
+	fi
+
+	local log_file="${GATEWAY_DIR}/openhands.log"
+	(
+		set -a
+		# shellcheck disable=SC1090
+		. "$OPENHANDS_ENV"
+		set +a
+		export DO_NOT_TRACK=1 VITE_DO_NOT_TRACK=1
+		cd "$HOME"
+		nohup "$agent_canvas_bin" --port "$OPENHANDS_PORT" --host 0.0.0.0 --public \
+			>"$log_file" 2>&1 &
+	)
+	log "OpenHands Agent Canvas started in the background; log: $log_file"
+}
+
+wait_for_openhands() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	local code="" _i
+	log "Waiting for OpenHands Agent Canvas (first start may download the agent server)..."
+	for _i in {1..600}; do
+		code="$(curl -s -o /dev/null -w '%{http_code}' \
+			-H "X-Session-API-Key: ${OPENHANDS_API_KEY}" \
+			"http://127.0.0.1:${OPENHANDS_PORT}/api/settings" 2>/dev/null || true)"
+		if [[ "$code" == "200" ]]; then
+			OPENHANDS_READY=1
+			break
+		fi
+		sleep 1
+	done
+
+	if [[ "$OPENHANDS_READY" == "1" ]]; then
+		log "OpenHands Agent Canvas is ready."
+	else
+		warn "OpenHands did not become ready on port ${OPENHANDS_PORT} (got ${code:-no response})."
+	fi
+}
+
+configure_openhands() {
+	[[ "$OPENHANDS_ENABLED" == "1" && "$OPENHANDS_READY" == "1" ]] || return 0
+
+	local opencode_bin
+	opencode_bin="$(command -v opencode || true)"
+	if [[ -z "$opencode_bin" ]]; then
+		warn "OpenCode is not on PATH; skipping the OpenHands ACP profile."
+		return 0
+	fi
+
+	log "Configuring OpenHands to use the free-web-ai gateway and OpenCode via ACP..."
+	OPENHANDS_URL="http://127.0.0.1:${OPENHANDS_PORT}" \
+	OPENHANDS_API_KEY="$OPENHANDS_API_KEY" \
+	OPENCODE_BIN="$opencode_bin" \
+	GATEWAY_BASE_URL="http://127.0.0.1:${GATEWAY_PORT}/v1" \
+	GATEWAY_API_KEY="$API_KEY" \
+	OPENHANDS_RECONFIGURE="$OPENHANDS_RECONFIGURE" \
+	bun "${INSTALL_DIR}/scripts/configure-openhands.ts" ||
+		warn "Could not configure OpenHands profiles; add OpenCode via ACP in Settings > Agent."
+}
+
+verify_openhands() {
+	[[ "$OPENHANDS_ENABLED" == "1" ]] || return 0
+
+	local code=""
+	code="$(curl -s -o /dev/null -w '%{http_code}' \
+		-H "X-Session-API-Key: ${OPENHANDS_API_KEY}" \
+		"http://127.0.0.1:${OPENHANDS_PORT}/" 2>/dev/null || true)"
+	if [[ "$code" == "200" ]]; then
+		log "OpenHands Agent Canvas is running on port ${OPENHANDS_PORT}."
+	else
+		warn "OpenHands Agent Canvas did not return HTTP 200 on port ${OPENHANDS_PORT} (got ${code:-no response})."
+	fi
+}
+
 write_frontpage_unit() {
 	mkdir -p "$UNIT_DIR"
 	cat >"${UNIT_DIR}/pi3b-frontpage.service" <<EOF
@@ -713,8 +942,11 @@ install_frontpage() {
 	log "Installing the frontpage on port ${FRONTPAGE_PORT}..."
 	mkdir -p "$FRONTPAGE_DIR"
 	cp "$src" "${FRONTPAGE_DIR}/index.html"
-	printf '{"opencode":%s,"novnc":%s,"gateway":%s}\n' \
-		"$WEB_PORT" "$NOVNC_PORT" "$GATEWAY_PORT" >"${FRONTPAGE_DIR}/frontpage.json"
+	local openhands_port=0
+	[[ "$OPENHANDS_ENABLED" == "1" ]] && openhands_port="$OPENHANDS_PORT"
+	printf '{"opencode":%s,"novnc":%s,"gateway":%s,"openhands":%s}\n' \
+		"$WEB_PORT" "$NOVNC_PORT" "$GATEWAY_PORT" "$openhands_port" \
+		>"${FRONTPAGE_DIR}/frontpage.json"
 
 	if [[ "$NO_SERVICE" != "1" && "$SYSTEMD_OK" == "1" ]]; then
 		write_frontpage_unit "$python_bin"
@@ -1118,6 +1350,10 @@ print_summary() {
 	[[ -z "${others// /}" ]] || printf 'Other IPs:  %s\n' "$others"
 	printf 'Web UI:     http://%s:%s\n' "$primary" "$WEB_PORT"
 	printf 'Web UI login: username "opencode", password in %s\n' "$WEB_ENV"
+	if [[ "$OPENHANDS_ENABLED" == "1" ]]; then
+		printf 'OpenHands:  http://%s:%s\n' "$primary" "$OPENHANDS_PORT"
+		printf 'OpenHands key: stored in %s\n' "$OPENHANDS_ENV"
+	fi
 	if [[ "$FRONTPAGE" == "1" ]]; then
 		printf 'Frontpage:  http://%s:%s/\n' "$primary" "$FRONTPAGE_PORT"
 	fi
@@ -1126,6 +1362,9 @@ print_summary() {
 	if command -v opencode >/dev/null 2>&1; then
 		printf 'OpenCode:   %s\n' "$(opencode --version 2>/dev/null || echo installed)"
 	fi
+	if [[ "$OPENHANDS_ENABLED" == "1" ]] && command -v agent-canvas >/dev/null 2>&1; then
+		printf 'Agent Canvas: %s\n' "$(agent-canvas --version 2>/dev/null || echo installed)"
+	fi
 	printf 'Bun:        %s\n' "$(bun --version 2>/dev/null || echo installed)"
 
 	printf '\nNext steps:\n'
@@ -1133,6 +1372,10 @@ print_summary() {
 	printf '  2. cd "%s"\n' "$INSTALL_DIR"
 	printf '  3. opencode\n'
 	printf '  4. Choose model: free-web-ai/chatgpt-auto\n'
+	if [[ "$OPENHANDS_ENABLED" == "1" ]]; then
+		printf '  5. Open OpenHands, paste the API key, then use Settings > Agent to pick the "opencode" ACP profile\n'
+		printf '     or keep the default OpenHands agent backed by free-web-ai/chatgpt-auto\n'
+	fi
 
 	if [[ "$LOGIN_OK" != "1" ]]; then
 		printf '\nChatGPT login is not complete yet:\n'
@@ -1164,6 +1407,13 @@ print_summary() {
 	printf '  systemctl --user restart opencode-web.service\n'
 	printf '  cat "%s"\n' "$WEB_ENV"
 
+	if [[ "$OPENHANDS_ENABLED" == "1" ]]; then
+		printf '\nOpenHands management:\n'
+		printf '  systemctl --user status openhands-canvas.service\n'
+		printf '  systemctl --user restart openhands-canvas.service\n'
+		printf '  cat "%s"\n' "$OPENHANDS_ENV"
+	fi
+
 	if [[ "$FRONTPAGE" == "1" ]]; then
 		printf '\nFrontpage management:\n'
 		printf '  systemctl --user status pi3b-frontpage.service\n'
@@ -1181,7 +1431,10 @@ main() {
 	ensure_shell_path
 	install_system_dependencies
 	install_bun
+	install_node
+	install_uv
 	install_opencode
+	install_openhands
 	install_project
 	install_project_dependencies
 	install_browser
@@ -1202,6 +1455,15 @@ main() {
 	login_chatgpt
 	start_gateway
 	verify_gateway
+
+	if [[ "$OPENHANDS_ENABLED" == "1" ]]; then
+		prepare_openhands_key
+		start_openhands
+		wait_for_openhands
+		configure_openhands
+		verify_openhands
+	fi
+
 	verify_opencode_web
 	install_frontpage
 	verify_frontpage

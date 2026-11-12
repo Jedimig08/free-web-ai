@@ -178,6 +178,26 @@
       <span class="dot" data-status title="Checking"></span>
     </a>
 
+    <a class="card" data-service="openhands" data-path="/" href="#">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+          stroke-linecap="round" stroke-linejoin="round">
+          <title>OpenHands</title>
+          <rect x="3" y="7" width="18" height="13" rx="3" />
+          <path d="M12 7V4" />
+          <circle cx="8.5" cy="13" r="1" fill="currentColor" stroke="none" />
+          <circle cx="15.5" cy="13" r="1" fill="currentColor" stroke="none" />
+          <path d="M9 17h6" />
+        </svg>
+      </span>
+      <span class="body">
+        <span class="name">OpenHands</span>
+        <span class="desc">Agent control plane (OpenCode via ACP)</span>
+        <span class="url"></span>
+      </span>
+      <span class="dot" data-status title="Checking"></span>
+    </a>
+
     <a class="card" data-service="novnc" data-path="/vnc.html?autoconnect=true&amp;resize=scale" href="#">
       <span class="glyph" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -222,7 +242,7 @@
     document.getElementById("host").textContent = host;
     document.getElementById("footer-host").textContent = host;
 
-    const FALLBACK = { opencode: 4096, novnc: 6080, gateway: 3456 };
+    const FALLBACK = { opencode: 4096, openhands: 8000, novnc: 6080, gateway: 3456 };
     const cards = [...document.querySelectorAll("a.card[data-service]")];
 
     async function loadPorts() {
@@ -262,6 +282,7 @@
       cards.forEach((card) => {
         const port = ports[card.dataset.service];
         if (port) wire(card, port);
+        else card.hidden = true;
       });
     });
   })();
