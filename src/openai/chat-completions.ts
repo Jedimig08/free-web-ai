@@ -13,7 +13,7 @@ import type {
 
 let _routeTimeoutMs = 300_000;
 
-const DEFAULT_MAX_PROMPT_CHARS = 60_000;
+const DEFAULT_MAX_PROMPT_CHARS = 8_000;
 
 function getMaxPromptChars(): number {
 	const configured = Number(process.env.TFG_MAX_PROMPT_CHARS);
